@@ -104,7 +104,7 @@ def main():
     num_samples = args.num_samples or len(dataset)
     num_samples = min(num_samples, len(dataset))
     
-    # Determine number of workers - use actual usable cores respecting cgroup limits
+    # Determine number of workers - use actual usable cores
     usable_cores = get_usable_cpu_count()
     if args.num_workers is not None:
         num_workers = args.num_workers
@@ -116,8 +116,8 @@ def main():
     print(f"Source: {dataset_config.dataroot_gt}")
     print(f"Output: {output_dir}")
     print(f"Degradations: blur, downsample, noise, JPEG compression")
-    print(f"Usable CPU cores (respecting limits): {usable_cores}, using: {num_workers} workers")
-    print(f"Note: Each worker limited to 1 thread to prevent resource exhaustion")
+    print(f"Detected usable cores: {usable_cores}, using: {num_workers} workers")
+    print(f"Note: Each worker limited to 1 thread. Override with --num_workers N")
     
     # Prepare work items
     work_items = [(i, str(output_dir)) for i in range(num_samples)]
