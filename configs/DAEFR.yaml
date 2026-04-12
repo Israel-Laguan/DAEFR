@@ -49,7 +49,7 @@ model:
 data:
   target: main_DAEFR.DataModuleFromConfig
   params:
-    batch_size: 64
+    batch_size: 32  # Reduced from 64 - OOM at 64, ~89GB expected at 32
     num_workers: 16
     pin_memory: true
     persistent_workers: true
