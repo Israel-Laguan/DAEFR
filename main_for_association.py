@@ -175,11 +175,13 @@ class WrappedDataset(Dataset):
 
 class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, batch_size, train=None, validation=None, test=None,
-                 wrap=False, num_workers=None):
+                 wrap=False, num_workers=None, pin_memory=False, persistent_workers=False):
         super().__init__()
         self.batch_size = batch_size
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size*2
+        self.pin_memory = pin_memory
+        self.persistent_workers = persistent_workers
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
@@ -205,16 +207,19 @@ class DataModuleFromConfig(pl.LightningDataModule):
 
     def _train_dataloader(self):
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
-                          num_workers=self.num_workers, shuffle=True)
+                          num_workers=self.num_workers, shuffle=True,
+                          pin_memory=self.pin_memory, persistent_workers=self.persistent_workers)
 
     def _val_dataloader(self):
         return DataLoader(self.datasets["validation"],
                           batch_size=self.batch_size,
-                          num_workers=self.num_workers)
+                          num_workers=self.num_workers,
+                          pin_memory=self.pin_memory)
 
     def _test_dataloader(self):
         return DataLoader(self.datasets["test"], batch_size=self.batch_size,
-                          num_workers=self.num_workers)
+                          num_workers=self.num_workers,
+                          pin_memory=self.pin_memory)
 
 
 class SetupCallback(Callback):

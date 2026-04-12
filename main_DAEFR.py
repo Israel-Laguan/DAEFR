@@ -18,6 +18,10 @@ import pdb
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
     print("Enabled cudnn.benchmark for optimized convolution algorithms")
+    # Enable TF32 for Ampere+ GPUs (A100, B200, etc.) - significantly faster
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    print("Enabled TF32 for faster training on Ampere/Blackwell GPUs")
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
