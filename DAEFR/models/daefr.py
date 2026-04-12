@@ -625,8 +625,8 @@ class DAEFRModel(pl.LightningModule):
 
         opt_ae = torch.optim.Adam(opt_ae_params, betas=(0.5, 0.9))
 
-        optimizations = opt_ae
-        schedules = []  # Initialize schedules list for PL 2.x compatibility
+        optimizations = [opt_ae]
+        schedules = []
 
         if self.use_facial_disc:
             opt_l = torch.optim.Adam(self.loss.net_d_left_eye.parameters(),
@@ -645,7 +645,9 @@ class DAEFRModel(pl.LightningModule):
                 opt_m, milestones=self.schedule_step, gamma=0.1, verbose=True)
             schedules += [s2, s3, s4]
 
-        return optimizations, schedules
+        if schedules:
+            return optimizations, schedules
+        return optimizations
 
     def get_last_layer(self):
         if self.fix_decoder:
