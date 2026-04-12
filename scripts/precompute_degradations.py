@@ -109,8 +109,8 @@ def main():
     if args.num_workers is not None:
         num_workers = args.num_workers
     else:
-        # Use all usable cores minus 1 for system, capped at 16
-        num_workers = min(16, max(1, usable_cores - 1))
+        # Use all usable cores minus 1 for system, capped at 23
+        num_workers = min(23, max(1, usable_cores - 1))
     
     print(f"Generating {num_samples} degraded images using {num_workers} workers...")
     print(f"Source: {dataset_config.dataroot_gt}")

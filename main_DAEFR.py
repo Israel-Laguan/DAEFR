@@ -205,8 +205,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.num_workers = num_workers
         else:
             usable_cores = get_usable_cpu_count()
-            # Use all usable cores minus 1 for system, capped at 16
-            self.num_workers = min(16, max(1, usable_cores - 1))
+            # Use all usable cores minus 1 for system, capped at 23
+            self.num_workers = min(23, max(1, usable_cores - 1))
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
