@@ -44,14 +44,20 @@ def process_batch(batch_info):
     """Process a batch of images (called by worker pool).
     
     Args:
-        batch_info: tuple of (indices, output_dir, batch_num, total_batches)
+        batch_info: tuple of (indices, output_dir, batch_num, total_batches, debug)
     Returns:
         Dict with 'processed' and 'failed' lists
     """
-    indices, output_dir, batch_num, total_batches = batch_info
+    import time as _time
+    indices, output_dir, batch_num, total_batches, debug = batch_info
     output_path = Path(output_dir)
     processed = []
     failed = []
+    
+    if debug and batch_num % 100 == 0:
+        print(f"\n[Worker] Starting batch {batch_num}/{total_batches} ({len(indices)} images)")
+    
+    batch_start = _time.time()
     
     for idx in indices:
         try:
@@ -75,6 +81,10 @@ def process_batch(batch_info):
         except Exception as e:
             # Log error and continue with other images in batch
             failed.append((idx, str(e)))
+    
+    batch_time = _time.time() - batch_start
+    if debug and batch_num % 100 == 0:
+        print(f"[Worker] Finished batch {batch_num}: {len(processed)} images in {batch_time:.1f}s ({batch_time/len(processed):.2f}s/img)")
     
     return {'processed': processed, 'failed': failed}
 
@@ -110,8 +120,10 @@ def main():
                         help='Number of samples to generate (default: all)')
     parser.add_argument('--num_workers', type=int, default=None,
                         help='Number of parallel workers (default: min(23, CPU count - 1))')
-    parser.add_argument('--batch_size', type=int, default=20,
-                        help='Number of images per worker batch (default: 20)')
+    parser.add_argument('--batch_size', type=int, default=10,
+                        help='Number of images per worker batch (default: 10, use 1 for max responsiveness)')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug output to see worker activity')
     args = parser.parse_args()
 
     # Load config to get dataset length
@@ -172,33 +184,51 @@ def main():
         start = i * batch_size
         end = min(start + batch_size, len(work_items))
         batch_indices = work_items[start:end]
-        batched_work_items.append((batch_indices, str(output_dir), i + 1, num_batches))
+        batched_work_items.append((batch_indices, str(output_dir), i + 1, num_batches, args.debug))
     
     work_items = batched_work_items
     
     print(f"Batch size: {batch_size} images per worker call")
     print(f"Total batches: {num_batches} (across {num_workers} workers)")
     
-    # Process batches in parallel with progress tracking
+    # Process batches using apply_async for eager worker scheduling
     total_processed = 0
     failed_items = []  # Collect failed indices for retry
+    completed_count = 0
     
-    print("\nProcessing batches (with resume and error handling)...")
-    print(f"Progress: 0/{num_batches} batches", end='', flush=True)
+    print("\nProcessing batches (with eager worker scheduling)...")
+    
+    def on_complete(result):
+        """Callback when a batch completes - updates progress immediately."""
+        nonlocal completed_count, total_processed
+        completed_count += 1
+        total_processed += len(result['processed'])
+        failed_items.extend(result['failed'])
+        # Update progress immediately
+        pct = completed_count * 100 // num_batches
+        print(f"\rProgress: {completed_count}/{num_batches} ({pct}%) | Images: {total_processed} | Failed: {len(failed_items)}    ", end='', flush=True)
+    
+    def on_error(e):
+        """Callback when a batch fails."""
+        nonlocal completed_count
+        completed_count += 1
+        print(f"\n  ✗ Batch failed: {e}")
     
     with Pool(
         processes=num_workers,
         initializer=init_worker,
         initargs=(args.config, args.split)
     ) as pool:
-        # Use imap with chunksize for better progress granularity
-        # chunksize=1 ensures we get updates as each batch completes
-        for i, result in enumerate(pool.imap_unordered(process_batch, work_items, chunksize=1)):
-            total_processed += len(result['processed'])
-            failed_items.extend(result['failed'])
-            # Manual progress update every batch for responsive display
-            pct = (i + 1) * 100 // num_batches
-            print(f"\rProgress: {i + 1}/{num_batches} ({pct}%) | Images: {total_processed} | Failed: {len(failed_items)}    ", end='', flush=True)
+        # Use apply_async for eager task assignment
+        # Workers get new tasks immediately when they finish
+        async_results = []
+        for work_item in work_items:
+            res = pool.apply_async(process_batch, (work_item,), callback=on_complete, error_callback=on_error)
+            async_results.append(res)
+        
+        # Wait for all to complete
+        for res in async_results:
+            res.wait()
     
     print()  # New line after progress
     
