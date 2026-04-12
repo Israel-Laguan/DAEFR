@@ -130,6 +130,13 @@ def main():
     num_samples = args.num_samples or len(dataset)
     num_samples = min(num_samples, len(dataset))
     
+    # Check for existing files to support resume
+    existing_files = set(f.stem for f in output_dir.glob("*.png"))
+    already_done = len(existing_files)
+    
+    if already_done > 0:
+        print(f"📁 Found {already_done} existing LQ images (resuming...)")
+    
     # Determine number of workers - use actual usable cores
     usable_cores = get_usable_cpu_count()
     if args.num_workers is not None:
@@ -138,7 +145,8 @@ def main():
         # Use all usable cores minus 1 for system, capped at 47 (tested: 48 threads available)
         num_workers = min(47, max(1, usable_cores - 1))
     
-    print(f"Generating {num_samples} degraded images using {num_workers} workers...")
+    remaining = num_samples - already_done
+    print(f"Generating {remaining} degraded images using {num_workers} workers...")
     print(f"Source: {dataset_config.dataroot_gt}")
     print(f"Output: {output_dir}")
     print(f"Degradations: blur, downsample, noise, JPEG compression")
@@ -147,16 +155,26 @@ def main():
     
     # Prepare batch work items for efficient multiprocessing
     # Each worker processes a batch of images, reducing overhead
-    all_indices = list(range(num_samples))
+    # Skip images that already exist (resume support)
     batch_size = args.batch_size
-    num_batches = (num_samples + batch_size - 1) // batch_size
     
     work_items = []
+    for idx in range(num_samples):
+        gt_path = dataset.paths[idx]
+        name = Path(gt_path).stem
+        if name not in existing_files:
+            work_items.append(idx)
+    
+    # Group into batches
+    num_batches = (len(work_items) + batch_size - 1) // batch_size
+    batched_work_items = []
     for i in range(num_batches):
-        start_idx = i * batch_size
-        end_idx = min(start_idx + batch_size, num_samples)
-        batch_indices = all_indices[start_idx:end_idx]
-        work_items.append((batch_indices, str(output_dir), i + 1, num_batches))
+        start = i * batch_size
+        end = min(start + batch_size, len(work_items))
+        batch_indices = work_items[start:end]
+        batched_work_items.append((batch_indices, str(output_dir), i + 1, num_batches))
+    
+    work_items = batched_work_items
     
     print(f"Batch size: {batch_size} images per worker call")
     print(f"Total batches: {num_batches} (across {num_workers} workers)")
@@ -207,8 +225,9 @@ def main():
     
     # Final report
     final_count = len(list(output_dir.glob("*.png")))
-    print(f"\n✅ Done! Generated {final_count} images in {output_dir}")
-    print(f"   Total processed (including existing): {total_processed}")
+    print(f"\n✅ Done! Total images in output: {final_count}")
+    print(f"   Newly generated: {total_processed}")
+    print(f"   Already existed: {already_done}")
     print(f"\nTo use for training, update your config:")
     print(f"  dataroot_lq: {args.output_dir}")
 
