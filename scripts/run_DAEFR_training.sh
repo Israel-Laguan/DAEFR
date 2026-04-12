@@ -10,8 +10,8 @@ conf_name='DAEFR'
 
 ROOT_PATH='./experiments/' # The path for saving model and logs
 
-gpus='0,1,2,3'
-# gpus='0,'
+# gpus='0,1,2,3'  # Multi-GPU (original)
+gpus='0'  # Single B200 with 192GB VRAM - batch_size=64, bf16-mixed
 
 #P: pretrain SL: soft learning
 node_n=1
