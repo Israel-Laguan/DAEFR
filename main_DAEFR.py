@@ -182,6 +182,17 @@ class WrappedDataset(Dataset):
         return self.data[idx]
 
 
+def get_usable_cpu_count():
+    """Get actual usable CPU count respecting cgroup/scheduler limits."""
+    import os
+    try:
+        # sched_getaffinity respects cgroup limits (best for containers)
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        # Fallback to cpu_count if sched_getaffinity not available
+        return os.cpu_count() or 4
+
+
 class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, batch_size, train=None, validation=None, test=None,
                  wrap=False, num_workers=None, pin_memory=False, persistent_workers=False, prefetch_factor=2):
@@ -189,12 +200,13 @@ class DataModuleFromConfig(pl.LightningDataModule):
         import os
         self.batch_size = batch_size
         self.dataset_configs = dict()
-        # Auto-detect num_workers: use provided value, or cpu_count - 1, or batch_size*2 as fallback
+        # Auto-detect num_workers: use provided value, or detect usable cores
         if num_workers is not None:
             self.num_workers = num_workers
         else:
-            cpu_count = os.cpu_count() or 4
-            self.num_workers = max(1, cpu_count - 1)  # Leave 1 core for system/main process
+            usable_cores = get_usable_cpu_count()
+            # Use all usable cores minus 1 for system, capped at 16
+            self.num_workers = min(16, max(1, usable_cores - 1))
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor

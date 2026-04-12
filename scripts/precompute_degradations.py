@@ -26,6 +26,13 @@ from basicsr.utils import tensor2img
 def init_worker(config_path, split):
     """Initialize worker process with dataset."""
     global _dataset
+    # Limit OpenCV and OpenMP threads per worker to prevent resource exhaustion
+    import cv2
+    cv2.setNumThreads(1)  # Single thread per worker
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    
     from DAEFR.data.ffhq_degradation_dataset import FFHQDegradationDataset
     config = OmegaConf.load(config_path)
     data_params = config.data.params
@@ -50,7 +57,24 @@ def process_image(idx_output):
     return idx
 
 
+def get_usable_cpu_count():
+    """Get actual usable CPU count respecting cgroup/scheduler limits."""
+    try:
+        # sched_getaffinity respects cgroup limits (best for containers)
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        # Fallback to cpu_count if sched_getaffinity not available
+        return os.cpu_count() or 4
+
+
 def main():
+    # Set thread limits at startup for main process too
+    import cv2
+    cv2.setNumThreads(1)  # Further reduce to 1 thread per process
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='configs/DAEFR.yaml',
                         help='Path to config file with degradation parameters')
@@ -61,7 +85,7 @@ def main():
     parser.add_argument('--num_samples', type=int, default=None,
                         help='Number of samples to generate (default: all)')
     parser.add_argument('--num_workers', type=int, default=None,
-                        help='Number of parallel workers (default: CPU count - 1)')
+                        help='Number of parallel workers (default: min(8, CPU count - 1))')
     args = parser.parse_args()
 
     # Load config to get dataset length
@@ -80,14 +104,20 @@ def main():
     num_samples = args.num_samples or len(dataset)
     num_samples = min(num_samples, len(dataset))
     
-    # Determine number of workers
-    num_workers = args.num_workers or max(1, cpu_count() - 1)
+    # Determine number of workers - use actual usable cores respecting cgroup limits
+    usable_cores = get_usable_cpu_count()
+    if args.num_workers is not None:
+        num_workers = args.num_workers
+    else:
+        # Use all usable cores minus 1 for system, capped at 16
+        num_workers = min(16, max(1, usable_cores - 1))
     
     print(f"Generating {num_samples} degraded images using {num_workers} workers...")
     print(f"Source: {dataset_config.dataroot_gt}")
     print(f"Output: {output_dir}")
     print(f"Degradations: blur, downsample, noise, JPEG compression")
-    print(f"CPU cores available: {cpu_count()}, using: {num_workers}")
+    print(f"Usable CPU cores (respecting limits): {usable_cores}, using: {num_workers} workers")
+    print(f"Note: Each worker limited to 1 thread to prevent resource exhaustion")
     
     # Prepare work items
     work_items = [(i, str(output_dir)) for i in range(num_samples)]
