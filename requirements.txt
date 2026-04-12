@@ -15,6 +15,10 @@ omegaconf
 basicsr
 facexlib
 
-# Utilities
+# Image processing
+kornia
+
+# Dataset utilities
+datasets
 huggingface_hub
 tqdm

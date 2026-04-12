@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-6 
+  base_learning_rate: 4.5e-6
   max_epochs: 100
   precision: 16
   use_gradient_checkpointing: false  # Disabled for B200 (192GB VRAM)
@@ -53,12 +53,12 @@ data:
     num_workers: null  # Auto-detect: uses os.cpu_count() - 1
     pin_memory: true
     persistent_workers: true
-    prefetch_factor: 2
+    prefetch_factor: 4
     train:
-      target: DAEFR.data.ffhq_degradation_dataset_LQ.FFHQDegradationDatasetCached
+      target: DAEFR.data.ffhq_degradation_dataset_predegraded.FFHQPreDegradedDataset
       params:
         dataroot_gt: ./datasets/FFHQ/images512x512
-        dataroot_lq: ./datasets/FFHQ/images512x512_LQ  # Pre-computed degraded images
+        dataroot_lq: ./datasets/ffhq32  # Pre-degraded 32x32 images (download with scripts/download_predegraded.py)
         io_backend:
           type: disk
         use_hflip: True
@@ -66,20 +66,8 @@ data:
         std: [0.5, 0.5, 0.5]
         out_size: 512
 
-        # These are not used but required for config compatibility
-        blur_kernel_size: [19,20]
-        kernel_list: ['iso', 'aniso']
-        kernel_prob: [0.5, 0.5]
-        blur_sigma: [0.1, 15]
-        downsample_range: [0.8, 30]
-        noise_range: [0, 20]
-        jpeg_range: [30, 100]
-
-        color_jitter_prob: ~
-        color_jitter_shift: 20
-        color_jitter_pt_prob: ~
-        gray_prob: ~
-        gt_gray: True
+        # Light noise for on-the-fly variation (degradations already baked into 32x32 images)
+        noise_range: [0, 5]
 
         crop_components: True
         component_path: experiments/pretrained_models/FFHQ_eye_mouth_landmarks_512.pth
