@@ -50,10 +50,10 @@ data:
   target: main_DAEFR.DataModuleFromConfig
   params:
     batch_size: 16  # Reduced from 32 - still OOM, ~45GB expected at 16
-    num_workers: 16
+    num_workers: 32  # Increased for better CPU saturation with heavy degradations
     pin_memory: true
     persistent_workers: true
-    prefetch_factor: 2
+    prefetch_factor: 4  # Increased for better pipeline depth
     train:
       target: DAEFR.data.ffhq_degradation_dataset.FFHQDegradationDataset
       params:
