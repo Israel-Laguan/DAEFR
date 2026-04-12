@@ -40,21 +40,43 @@ def init_worker(config_path, split):
     _dataset = FFHQDegradationDataset(dataset_config)
 
 
-def process_image(idx_output):
-    """Process a single image (called by worker pool)."""
-    idx, output_dir = idx_output
-    sample = _dataset.getitem_degraded(idx)
+def process_batch(batch_info):
+    """Process a batch of images (called by worker pool).
     
-    # Get filename from gt_path
-    gt_path = sample['gt_path']
-    name = Path(gt_path).stem
+    Args:
+        batch_info: tuple of (indices, output_dir, batch_num, total_batches)
+    Returns:
+        Dict with 'processed' and 'failed' lists
+    """
+    indices, output_dir, batch_num, total_batches = batch_info
+    output_path = Path(output_dir)
+    processed = []
+    failed = []
     
-    # Save LQ image
-    lq = tensor2img(sample['lq'])
-    output_path = Path(output_dir) / f"{name}.png"
-    cv2.imwrite(str(output_path), lq)
+    for idx in indices:
+        try:
+            sample = _dataset.getitem_degraded(idx)
+            
+            # Get filename from gt_path
+            gt_path = sample['gt_path']
+            name = Path(gt_path).stem
+            output_file = output_path / f"{name}.png"
+            
+            # Skip if already exists (resume support)
+            if output_file.exists():
+                processed.append(idx)
+                continue
+            
+            # Save LQ image
+            lq = tensor2img(sample['lq'])
+            cv2.imwrite(str(output_file), lq)
+            processed.append(idx)
+            
+        except Exception as e:
+            # Log error and continue with other images in batch
+            failed.append((idx, str(e)))
     
-    return idx
+    return {'processed': processed, 'failed': failed}
 
 
 def get_usable_cpu_count():
@@ -85,7 +107,9 @@ def main():
     parser.add_argument('--num_samples', type=int, default=None,
                         help='Number of samples to generate (default: all)')
     parser.add_argument('--num_workers', type=int, default=None,
-                        help='Number of parallel workers (default: min(8, CPU count - 1))')
+                        help='Number of parallel workers (default: min(23, CPU count - 1))')
+    parser.add_argument('--batch_size', type=int, default=20,
+                        help='Number of images per worker batch (default: 20)')
     args = parser.parse_args()
 
     # Load config to get dataset length
@@ -109,8 +133,8 @@ def main():
     if args.num_workers is not None:
         num_workers = args.num_workers
     else:
-        # Use all usable cores minus 1 for system, capped at 23
-        num_workers = min(23, max(1, usable_cores - 1))
+        # Use all usable cores minus 1 for system, capped at 47 (tested: 48 threads available)
+        num_workers = min(47, max(1, usable_cores - 1))
     
     print(f"Generating {num_samples} degraded images using {num_workers} workers...")
     print(f"Source: {dataset_config.dataroot_gt}")
@@ -119,22 +143,65 @@ def main():
     print(f"Detected usable cores: {usable_cores}, using: {num_workers} workers")
     print(f"Note: Each worker limited to 1 thread. Override with --num_workers N")
     
-    # Prepare work items
-    work_items = [(i, str(output_dir)) for i in range(num_samples)]
+    # Prepare batch work items for efficient multiprocessing
+    # Each worker processes a batch of images, reducing overhead
+    all_indices = list(range(num_samples))
+    batch_size = args.batch_size
+    num_batches = (num_samples + batch_size - 1) // batch_size
     
-    # Process in parallel with progress bar
+    work_items = []
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, num_samples)
+        batch_indices = all_indices[start_idx:end_idx]
+        work_items.append((batch_indices, str(output_dir), i + 1, num_batches))
+    
+    print(f"Batch size: {batch_size} images per worker call")
+    print(f"Total batches: {num_batches} (across {num_workers} workers)")
+    
+    # Process batches in parallel with progress tracking
+    total_processed = 0
+    failed_items = []  # Collect failed indices for retry
+    
+    print("\nProcessing batches (with resume and error handling)...")
     with Pool(
         processes=num_workers,
         initializer=init_worker,
         initargs=(args.config, args.split)
     ) as pool:
-        list(tqdm(
-            pool.imap(process_image, work_items),
-            total=num_samples,
+        for result in tqdm(
+            pool.imap_unordered(process_batch, work_items),
+            total=num_batches,
             desc="Generating LQ images"
-        ))
+        ):
+            total_processed += len(result['processed'])
+            failed_items.extend(result['failed'])
     
-    print(f"\nDone! Generated {num_samples} images in {output_dir}")
+    # Retry failed items once (sequentially to avoid parallel issues)
+    if failed_items:
+        print(f"\n⚠️  {len(failed_items)} images failed. Retrying sequentially...")
+        for idx, error in failed_items:
+            try:
+                sample = dataset.getitem_degraded(idx)
+                gt_path = sample['gt_path']
+                name = Path(gt_path).stem
+                output_file = output_dir / f"{name}.png"
+                
+                if not output_file.exists():
+                    lq = tensor2img(sample['lq'])
+                    cv2.imwrite(str(output_file), lq)
+                    total_processed += 1
+                    print(f"  ✓ Retry successful: {name}")
+                else:
+                    total_processed += 1
+                    
+            except Exception as e:
+                print(f"  ✗ Retry failed for index {idx}: {e}")
+    
+    # Final report
+    final_count = len(list(output_dir.glob("*.png")))
+    print(f"\n✅ Done! Generated {final_count} images in {output_dir}")
+    print(f"   Total processed (including existing): {total_processed}")
     print(f"\nTo use for training, update your config:")
     print(f"  dataroot_lq: {args.output_dir}")
 
