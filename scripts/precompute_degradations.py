@@ -95,7 +95,8 @@ def main():
     # Set thread limits at startup for main process too
     import cv2
     cv2.setNumThreads(1)  # Further reduce to 1 thread per process
-    cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)  # Silence warnings in main process too
+    # Suppress OpenCV warnings via environment (cv2.setLogLevel not available in older versions)
+    os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
     os.environ['OMP_NUM_THREADS'] = '1'
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
     os.environ['MKL_NUM_THREADS'] = '1'
