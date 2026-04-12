@@ -164,18 +164,23 @@ def main():
     failed_items = []  # Collect failed indices for retry
     
     print("\nProcessing batches (with resume and error handling)...")
+    print(f"Progress: 0/{num_batches} batches", end='', flush=True)
+    
     with Pool(
         processes=num_workers,
         initializer=init_worker,
         initargs=(args.config, args.split)
     ) as pool:
-        for result in tqdm(
-            pool.imap_unordered(process_batch, work_items),
-            total=num_batches,
-            desc="Generating LQ images"
-        ):
+        # Use imap with chunksize for better progress granularity
+        # chunksize=1 ensures we get updates as each batch completes
+        for i, result in enumerate(pool.imap_unordered(process_batch, work_items, chunksize=1)):
             total_processed += len(result['processed'])
             failed_items.extend(result['failed'])
+            # Manual progress update (more reliable than tqdm for large batches)
+            if (i + 1) % 10 == 0 or i == num_batches - 1:
+                print(f"\rProgress: {i + 1}/{num_batches} batches ({(i+1)*100//num_batches}%) - {total_processed} images", end='', flush=True)
+    
+    print()  # New line after progress
     
     # Retry failed items once (sequentially to avoid parallel issues)
     if failed_items:
