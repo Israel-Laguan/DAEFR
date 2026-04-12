@@ -186,9 +186,15 @@ class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, batch_size, train=None, validation=None, test=None,
                  wrap=False, num_workers=None, pin_memory=False, persistent_workers=False, prefetch_factor=2):
         super().__init__()
+        import os
         self.batch_size = batch_size
         self.dataset_configs = dict()
-        self.num_workers = num_workers if num_workers is not None else batch_size*2
+        # Auto-detect num_workers: use provided value, or cpu_count - 1, or batch_size*2 as fallback
+        if num_workers is not None:
+            self.num_workers = num_workers
+        else:
+            cpu_count = os.cpu_count() or 4
+            self.num_workers = max(1, cpu_count - 1)  # Leave 1 core for system/main process
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
