@@ -9,7 +9,7 @@ import torch.utils.data as data
 from torchvision.transforms.functional import (adjust_brightness, adjust_contrast, adjust_hue, adjust_saturation,
                                                normalize)
 
-from basicsr.data import degradations as degradations
+from DAEFR.data import degradations_patch as degradations
 from basicsr.data.data_util import paths_from_folder
 from basicsr.data.transforms import augment
 from basicsr.utils import FileClient, get_root_logger, imfrombytes, img2tensor
@@ -35,7 +35,7 @@ class FFHQDegradationDataset(data.Dataset):
         self.eye_enlarge_ratio = opt.get('eye_enlarge_ratio', 1)
 
         if self.crop_components:
-            self.components_list = torch.load(opt.get('component_path'))
+            self.components_list = torch.load(opt.get('component_path'), weights_only=False)
 
         if self.io_backend_opt['type'] == 'lmdb':
             self.io_backend_opt['db_paths'] = self.gt_folder

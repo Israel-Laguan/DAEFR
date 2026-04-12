@@ -1,6 +1,11 @@
 #export BASICSR_JIT=True
 export CXX=g++
 
+# Increase NCCL timeout to prevent timeout during torch.compile
+export NCCL_TIMEOUT=3600  # 1 hour instead of default 30 minutes
+export TORCH_NCCL_BLOCKING_WAIT=0  # Non-blocking to prevent deadlock
+export NCCL_ASYNC_ERROR_HANDLING=1  # Async error handling to avoid blocking
+
 conf_name='DAEFR'
 
 ROOT_PATH='./experiments/' # The path for saving model and logs

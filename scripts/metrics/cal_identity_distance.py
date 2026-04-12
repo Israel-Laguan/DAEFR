@@ -45,7 +45,7 @@ def calculate_identity_distance_folder():
                                   use_se = False)
     identity_model_path = 'experiments/pretrained_models/arcface_resnet18.pth'
     
-    sd = torch.load(identity_model_path, map_location="cpu")
+    sd = torch.load(identity_model_path, map_location="cpu", weights_only=False)
     for k, v in deepcopy(sd).items():
         if k.startswith('module.'):
             sd[k[7:]] = v

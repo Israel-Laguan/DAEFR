@@ -116,9 +116,12 @@ class DAEFRModel(pl.LightningModule):
                  monitor=None,
                  special_params_lr_scale=1.0,
                  comp_params_lr_scale=1.0,
-                 schedule_step=[80000, 200000]
+                 schedule_step=[80000, 200000],
+                 use_gradient_checkpointing=False
                  ):
         super().__init__()
+        self.automatic_optimization = False  # PL 2.x: manual optimization for multiple optimizers
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         # import pdb
         # pdb.set_trace()
@@ -146,6 +149,10 @@ class DAEFRModel(pl.LightningModule):
 
 
         self.cross_attention = MultiHeadAttnBlock(in_channels=256,head_size=8)
+
+        # Gradient checkpointing for memory efficiency (trades compute for VRAM)
+        if self.use_gradient_checkpointing:
+            print("Enabled gradient checkpointing for transformer layers (saves ~30% VRAM)")
 
         # codeformer code-----------------------------------
         dim_embd=512
@@ -180,7 +187,10 @@ class DAEFRModel(pl.LightningModule):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-
+    def setup(self, stage=None):
+        """Called by PyTorch Lightning before training/testing.
+        torch.compile disabled - causes checkpoint loading issues with _orig_mod prefix."""
+        pass
 
     def init_from_ckpt_two(self, path_HQ, path_LQ, ignore_keys=list()):
 
@@ -251,10 +261,10 @@ class DAEFRModel(pl.LightningModule):
                     'vqvae_LQ.post_quant_conv.bias': 0}
 
         # load HQ checkpoint
-        sd_HQ = torch.load(path_HQ, map_location="cpu")["state_dict"]
+        sd_HQ = torch.load(path_HQ, map_location="cpu", weights_only=False)["state_dict"]
         HQ_keys = list(sd_HQ.keys())
         # load LQ checkpoint
-        sd_LQ = torch.load(path_LQ, map_location="cpu")["state_dict"]
+        sd_LQ = torch.load(path_LQ, map_location="cpu", weights_only=False)["state_dict"]
         LQ_keys = list(sd_LQ.keys())
 
         print('origin HQ keys number =',len(HQ_keys))
@@ -391,9 +401,13 @@ class DAEFRModel(pl.LightningModule):
         # BCHW -> BC(HW) -> (HW)BC
         feat_emb = self.feat_emb(lq_feat.flatten(2).permute(2,0,1))
         query_emb = feat_emb
-        # Transformer encoder
-        for layer in self.ft_layers:
-            query_emb = layer(query_emb, query_pos=pos_emb)
+        # Transformer encoder with optional gradient checkpointing
+        if self.use_gradient_checkpointing and self.training:
+            for layer in self.ft_layers:
+                query_emb = torch.utils.checkpoint.checkpoint(layer, query_emb, pos_emb, use_reentrant=False)
+        else:
+            for layer in self.ft_layers:
+                query_emb = layer(query_emb, query_pos=pos_emb)
 
 
         # output logits
@@ -421,10 +435,11 @@ class DAEFRModel(pl.LightningModule):
         indices = info[2].view(quant_gt.shape[0], -1)
         return quant_gt, indices, info, hs, h, dictionary
 
-    def training_step(self, batch, batch_idx, optimizer_idx=None):
-
-        if optimizer_idx == None:
-            optimizer_idx = 0
+    def training_step(self, batch, batch_idx):
+        # PL 2.x: manual optimization - get all optimizers
+        opts = self.optimizers()
+        if not isinstance(opts, list):
+            opts = [opts]
 
         x = batch[self.image_key]
         gt = batch['gt']
@@ -445,78 +460,87 @@ class DAEFRModel(pl.LightningModule):
         else:
             components = None
 
-        if optimizer_idx == 0:
-            
-            aeloss = BCE_loss + 10*L2_loss
-            
-            rec_loss = (torch.abs(gt.contiguous() - xrec.contiguous()))
+        # Optimizer 0: Autoencoder
+        opt_ae = opts[0]
+        aeloss = BCE_loss + 10*L2_loss
 
-            log_dict_ae = {
-                   "train/BCE_loss": BCE_loss.detach().mean(),
-                   "train/L2_loss": L2_loss.detach().mean(),
-                   "train/Rec_loss": rec_loss.detach().mean()
-                }
-            
-            bce_loss = log_dict_ae["train/BCE_loss"]
-            self.log("BCE_loss", bce_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
-            
-            l2_loss = log_dict_ae["train/L2_loss"]
-            self.log("L2_loss", l2_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
-            
-            Rec_loss = log_dict_ae["train/Rec_loss"]
-            self.log("Rec_loss", Rec_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+        rec_loss = (torch.abs(gt.contiguous() - xrec.contiguous()))
 
-            self.log_dict(log_dict_ae, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
-            return aeloss
+        log_dict_ae = {
+               "train/BCE_loss": BCE_loss.detach().mean(),
+               "train/L2_loss": L2_loss.detach().mean(),
+               "train/Rec_loss": rec_loss.detach().mean()
+            }
 
-        if optimizer_idx == 1:
-            # discriminator
-            discloss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
+        bce_loss = log_dict_ae["train/BCE_loss"]
+        self.log("BCE_loss", bce_loss, prog_bar=True,
+                 logger=True, on_step=True, on_epoch=True)
+
+        l2_loss = log_dict_ae["train/L2_loss"]
+        self.log("L2_loss", l2_loss, prog_bar=True,
+                 logger=True, on_step=True, on_epoch=True)
+
+        Rec_loss = log_dict_ae["train/Rec_loss"]
+        self.log("Rec_loss", Rec_loss, prog_bar=True,
+                 logger=True, on_step=True, on_epoch=True)
+
+        self.log_dict(log_dict_ae, prog_bar=False,
+                      logger=True, on_step=True, on_epoch=True)
+
+        opt_ae.zero_grad()
+        self.manual_backward(aeloss)
+        opt_ae.step()
+
+        # Optimizer 1: Main discriminator (if available)
+        if len(opts) > 1 and self.global_step >= self.disc_start:
+            opt_disc = opts[1]
+            discloss, log_dict_disc = self.loss(qloss, x, xrec, components, 1, self.global_step,
                                                 last_layer=None, split="train")
             self.log("train/discloss", discloss, prog_bar=True,
                      logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False,
                           logger=True, on_step=True, on_epoch=True)
-            return discloss
+            opt_disc.zero_grad()
+            self.manual_backward(discloss)
+            opt_disc.step()
 
-        if self.disc_start <= self.global_step:
+        # Facial component discriminators (optimizers 2, 3, 4)
+        if self.use_facial_disc and len(opts) > 4 and self.disc_start <= self.global_step:
+            # Left eye discriminator (optimizer 2)
+            opt_l = opts[2]
+            disc_left_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 2, self.global_step,
+                                                      last_layer=None, split="train")
+            self.log("train/disc_left_loss", disc_left_loss,
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_disc, prog_bar=False,
+                          logger=True, on_step=True, on_epoch=True)
+            opt_l.zero_grad()
+            self.manual_backward(disc_left_loss)
+            opt_l.step()
 
-            # left eye
-            if optimizer_idx == 2:
-                # discriminator
-                disc_left_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
-                                                          last_layer=None, split="train")
-                self.log("train/disc_left_loss", disc_left_loss,
-                         prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False,
-                              logger=True, on_step=True, on_epoch=True)
-                return disc_left_loss
+            # Right eye discriminator (optimizer 3)
+            opt_r = opts[3]
+            disc_right_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 3, self.global_step,
+                                                       last_layer=None, split="train")
+            self.log("train/disc_right_loss", disc_right_loss,
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_disc, prog_bar=False,
+                          logger=True, on_step=True, on_epoch=True)
+            opt_r.zero_grad()
+            self.manual_backward(disc_right_loss)
+            opt_r.step()
 
-            # right eye
-            if optimizer_idx == 3:
-                # discriminator
-                disc_right_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
-                                                           last_layer=None, split="train")
-                self.log("train/disc_right_loss", disc_right_loss,
-                         prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False,
-                              logger=True, on_step=True, on_epoch=True)
-                return disc_right_loss
-
-            # mouth
-            if optimizer_idx == 4:
-                # discriminator
-                disc_mouth_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
-                                                           last_layer=None, split="train")
-                self.log("train/disc_mouth_loss", disc_mouth_loss,
-                         prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False,
-                              logger=True, on_step=True, on_epoch=True)
-                return disc_mouth_loss
+            # Mouth discriminator (optimizer 4)
+            opt_m = opts[4]
+            disc_mouth_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 4, self.global_step,
+                                                       last_layer=None, split="train")
+            self.log("train/disc_mouth_loss", disc_mouth_loss,
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_disc, prog_bar=False,
+                          logger=True, on_step=True, on_epoch=True)
+            opt_m.zero_grad()
+            self.manual_backward(disc_mouth_loss)
+            opt_m.step()
 
     def validation_step(self, batch, batch_idx):
         x = batch[self.image_key]

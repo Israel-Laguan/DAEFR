@@ -205,7 +205,7 @@ def load_model_and_dset(config, ckpt, gpu, eval_mode):
     # pdb.set_trace()
     # now load the specified checkpoint
     if ckpt:
-        pl_sd = torch.load(ckpt, map_location="cpu")
+        pl_sd = torch.load(ckpt, map_location="cpu", weights_only=False)
     else:
         pl_sd = {"state_dict": None}
 

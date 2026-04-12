@@ -8,8 +8,8 @@ from torch.utils.data import random_split, DataLoader, Dataset
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor, TQDMProgressBar
+from pytorch_lightning.utilities import rank_zero_only
 import random
 import pdb
 
@@ -130,16 +130,26 @@ def get_parser(**parser_kwargs):
         default=1,
         help="number of gpu nodes",
     )
-    
+    parser.add_argument(
+        "--gpus",
+        type=str,
+        default=None,
+        help="GPU IDs to use (e.g., '0' or '0,1'). Required for training.",
+    )
 
     return parser
 
 
 def nondefault_trainer_args(opt):
-    parser = argparse.ArgumentParser()
-    parser = Trainer.add_argparse_args(parser)
-    args = parser.parse_args([])
-    return sorted(k for k in vars(args) if getattr(opt, k) != getattr(args, k))
+    """In PL 2.x, we manually track which args differ from defaults."""
+    # Default trainer args that we care about
+    default_args = {
+        "max_epochs": None,
+        "gpus": None,
+        "num_nodes": 1,
+        "accumulate_grad_batches": 1,
+    }
+    return sorted(k for k in default_args if hasattr(opt, k) and getattr(opt, k) != default_args[k])
 
 
 def instantiate_from_config(config):
@@ -245,7 +255,7 @@ class ImageLogger(Callback):
         self.max_images = max_images
         self.logger_log_images = {
             pl.loggers.WandbLogger: self._wandb,
-            pl.loggers.TestTubeLogger: self._testtube,
+            pl.loggers.TensorBoardLogger: self._tensorboard,
         }
         self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
         if not increase_log_steps:
@@ -262,7 +272,7 @@ class ImageLogger(Callback):
         pl_module.logger.experiment.log(grids)
 
     @rank_zero_only
-    def _testtube(self, pl_module, images, batch_idx, split):
+    def _tensorboard(self, pl_module, images, batch_idx, split):
         for k in images:
             grid = torchvision.utils.make_grid(images[k])
             grid = (grid+1.0)/2.0 # -1,1 -> 0,1; c,h,w
@@ -332,10 +342,10 @@ class ImageLogger(Callback):
             return True
         return False
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         self.log_img(pl_module, batch, batch_idx, split="train")
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         self.log_img(pl_module, batch, batch_idx, split="val")
 
 
@@ -391,35 +401,50 @@ if __name__ == "__main__":
     sys.path.append(os.getcwd())
 
     parser = get_parser()
-    parser = Trainer.add_argparse_args(parser)
 
     opt, unknown = parser.parse_known_args()
+
+    # GPU guard: training requires GPU
+    if opt.train and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available but training was requested. Training on CPU is not supported.")
     if opt.name and opt.resume:
         raise ValueError(
             "-n/--name and -r/--resume cannot be specified both."
             "If you want to resume training in a new log folder, "
             "use -n/--name in combination with --resume_from_checkpoint"
         )
+    # Resume logic: handle both standalone checkpoints and logs-based checkpoints
     if opt.resume:
         if not os.path.exists(opt.resume):
             raise ValueError("Cannot find {}".format(opt.resume))
-        if os.path.isfile(opt.resume):
-            paths = opt.resume.split("/")
-            idx = len(paths)-paths[::-1].index("logs")+1
-            logdir = "/".join(paths[:idx])
-            ckpt = opt.resume
-        else:
-            assert os.path.isdir(opt.resume), opt.resume
+        
+        opt.resume_from_checkpoint = opt.resume
+        
+        if os.path.isdir(opt.resume):
+            # Resume from a logs directory - find last checkpoint and load configs
             logdir = opt.resume.rstrip("/")
-            ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
-
-        opt.resume_from_checkpoint = ckpt
-        base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*.yaml")))
-        opt.base = base_configs+opt.base
-        _tmp = logdir.split("/")
-        nowname = _tmp[_tmp.index("logs")+1]+opt.postfix
-        logdir = os.path.join(opt.root_path, "logs", nowname)
+            opt.resume_from_checkpoint = os.path.join(logdir, "checkpoints", "last.ckpt")
+            base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*.yaml")))
+            opt.base = base_configs + opt.base
+            _tmp = logdir.split("/")
+            if "logs" in _tmp:
+                nowname = _tmp[_tmp.index("logs")+1] + opt.postfix
+            else:
+                nowname = os.path.basename(logdir) + opt.postfix
+        else:
+            # Standalone checkpoint file - use CLI --base for configs
+            if opt.name:
+                name = "_"+opt.name
+            elif opt.base:
+                cfg_fname = os.path.split(opt.base[0])[-1]
+                cfg_name = os.path.splitext(cfg_fname)[0]
+                name = "_"+cfg_name
+            else:
+                name = ""
+            nowname = now + name + opt.postfix
+            logdir = os.path.join(opt.root_path, "logs", nowname)
     else:
+        # Fresh run
         if opt.name:
             name = "_"+opt.name
         elif opt.base:
@@ -431,8 +456,8 @@ if __name__ == "__main__":
         nowname = now+name+opt.postfix
         logdir = os.path.join(opt.root_path, "logs", nowname)
 
-    
-    ckptdir = os.path.join(logdir, "checkpoints")
+    # Flat structure: checkpoints in experiments/, logs in experiments/logs/
+    ckptdir = os.path.join(opt.root_path, nowname)
     cfgdir = os.path.join(logdir, "configs")
 
     seed_everything(opt.seed)
@@ -445,21 +470,25 @@ if __name__ == "__main__":
         lightning_config = config.pop("lightning", OmegaConf.create())
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
-        # default to ddp
-        # trainer_config["distributed_backend"] = "ddp"
-        trainer_config["accelerator"] = "ddp"
-        # trainer_config["plugins"]="ddp_sharded"
+        # PL 2.x: use strategy instead of accelerator for ddp
+        # Enable find_unused_parameters for models with some unused params
+        trainer_config["strategy"] = "ddp_find_unused_parameters_true"
+        # Copy CLI args to trainer_config
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
-        if not "gpus" in trainer_config:
-            del trainer_config["distributed_backend"]
-            cpu = True
-        else:
-            gpuinfo = trainer_config["gpus"]
+        # Handle GPU/CPU setup for PL 2.x
+        if "gpus" in trainer_config and trainer_config["gpus"]:
+            # PL 2.x: use accelerator="gpu" and devices instead of gpus
+            gpuinfo = trainer_config.pop("gpus")
+            trainer_config["accelerator"] = "gpu"
+            trainer_config["devices"] = gpuinfo if isinstance(gpuinfo, int) else len(gpuinfo.strip(",").split(","))
             print(f"Running on GPUs {gpuinfo}")
             cpu = False
+        else:
+            trainer_config["accelerator"] = "cpu"
+            cpu = True
         trainer_config["max_epochs"] = config.model.max_epochs
-        trainer_opt = argparse.Namespace(**trainer_config)
+        trainer_config["profiler"] = "simple"
         lightning_config.trainer = trainer_config
         if opt.resume:
             print('====== Resume from last checkpoint and delete the default one ======')
@@ -478,25 +507,16 @@ if __name__ == "__main__":
         # debugging (wrongly sized pudb ui)
         # thus prefer testtube for now
         default_logger_cfgs = {
-            "wandb": {
-                "target": "pytorch_lightning.loggers.WandbLogger",
+            "csv": {
+                "target": "pytorch_lightning.loggers.CSVLogger",
                 "params": {
-                    "name": nowname,
                     "save_dir": logdir,
-                    "offline": opt.debug,
-                    "id": nowname,
-                }
-            },
-            "testtube": {
-                "target": "pytorch_lightning.loggers.TestTubeLogger",
-                "params": {
-                    "name": "testtube",
-                    "save_dir": logdir,
+                    "name": "csv",
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
-        logger_cfg = lightning_config.logger or OmegaConf.create()
+        default_logger_cfg = default_logger_cfgs["csv"]
+        logger_cfg = lightning_config.get("logger") or OmegaConf.create()
         logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
         trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
 
@@ -512,7 +532,7 @@ if __name__ == "__main__":
                 "verbose": True,
                 "save_last": True,
                 "save_top_k": 3,
-                "period": 1
+                "every_n_epochs": 1
             }
         }
         if hasattr(model, "monitor"):
@@ -520,9 +540,10 @@ if __name__ == "__main__":
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
             default_modelckpt_cfg["params"]["save_top_k"] = 3
         # pdb.set_trace()
-        modelckpt_cfg = lightning_config.modelcheckpoint or OmegaConf.create()
+        modelckpt_cfg = lightning_config.get("modelcheckpoint") or OmegaConf.create()
         modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
-        trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
+        # PL 2.x: checkpoint_callback removed, add to callbacks list instead
+        checkpoint_callback = instantiate_from_config(modelckpt_cfg)
 
         # add callback which sets up log directory
         default_callbacks_cfg = {
@@ -554,11 +575,16 @@ if __name__ == "__main__":
                 }
             },
         }
-        callbacks_cfg = lightning_config.callbacks or OmegaConf.create()
+        callbacks_cfg = lightning_config.get("callbacks") or OmegaConf.create()
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
+        # Add checkpoint callback to the list (PL 2.x requirement)
+        trainer_kwargs["callbacks"].append(checkpoint_callback)
+        # Add TQDMProgressBar with custom refresh rate to reduce terminal spam
+        trainer_kwargs["callbacks"].append(TQDMProgressBar(refresh_rate=10))
 
-        trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
+        # PL 2.x: direct Trainer instantiation instead of from_argparse_args
+        trainer = Trainer(**trainer_config, **trainer_kwargs)
 
         # data
         data = instantiate_from_config(config.data)
@@ -571,7 +597,7 @@ if __name__ == "__main__":
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
         if not cpu:
-            ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
+            ngpu = len(lightning_config.trainer.devices) if isinstance(lightning_config.trainer.devices, list) else lightning_config.trainer.devices
         else:
             ngpu = 1
         accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches or 1
@@ -600,7 +626,7 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
-                trainer.fit(model, data)
+                trainer.fit(model, data, ckpt_path=opt.resume_from_checkpoint if opt.resume else None, weights_only=False)
             except Exception:
                 melk()
                 raise

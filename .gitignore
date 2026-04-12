@@ -2,3 +2,9 @@ __pycache__
 experiments/
 datasets/
 results/
+venv/
+assets/paper/
+issues_to_report/
+docs/
+inference.py
+

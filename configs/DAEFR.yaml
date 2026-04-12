@@ -1,6 +1,8 @@
 model:
   base_learning_rate: 4.5e-6 
   max_epochs: 100
+  precision: 16
+  use_gradient_checkpointing: true  # Enabled to save VRAM with dual GPU training
   target: DAEFR.models.daefr.DAEFRModel
   params:
     image_key: 'lq'
@@ -48,7 +50,9 @@ data:
   target: main_DAEFR.DataModuleFromConfig
   params:
     batch_size: 2
-    num_workers: 8
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
     train:
       target: DAEFR.data.ffhq_degradation_dataset.FFHQDegradationDataset
       params:

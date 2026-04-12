@@ -41,9 +41,9 @@ pip install -r requirements.txt
 - Training data: **HQ Codebook**, **LQ Codebook** and **DAEFR** are trained with **FFHQ** which attained from [FFHQ repository](https://github.com/NVlabs/ffhq-dataset). 
 - The original size of the images in FFHQ are 1024x1024. We resize them to 512x512 with bilinear interpolation in our work. 
 - We provide our resized 512x512 FFHQ on [HuggingFace](https://huggingface.co/datasets/LIAGM/FFHQ_datasets/tree/main). 
-- Link this 512x512 version dataset to ```./datasets/FFHQ/image512x512.```
+- Link this 512x512 version dataset to ```./datasets/FFHQ/images512x512.```
 - If you use our FFHQ dataset, please change the filename or change the code in the line 43 to ```f'{v:05d}.png'``` in 
-```/Your/conda/envs/DAEFR/lib/python3.8/site-packages/basicsr/data/ffhq_dataset.py```
+```Your environment's site-packages/basicsr/data/ffhq_dataset.py``` (e.g., for venv: ```venv/lib/python*/site-packages/basicsr/data/ffhq_dataset.py```)
 
 **Testing Dataset**: 
 
@@ -184,3 +184,12 @@ We thank everyone who makes their code and models available, especially [Taming 
 
 ## Contact
 For any question, feel free to email `louis19950117@gmail.com`.
+
+```
+
+`cd ~/code/datasets/DAEFR`
+```
+venv/bin/python -u main_DAEFR.py   --root-path ./experiments/   --base configs/DAEFR.yaml   -t True --gpus 0,1 --num-nodes 1   --resume ./experiments/DAEFR_model.ckpt   --max_epochs 50
+```
+watch -n 1 nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu --format=csv
+```

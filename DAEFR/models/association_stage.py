@@ -92,10 +92,10 @@ class DAEFRModel(pl.LightningModule):
                     'vqvae.post_quant_conv.bias': 0}
 
         # load HQ checkpoint
-        sd_HQ = torch.load(path_HQ, map_location="cpu")["state_dict"]
+        sd_HQ = torch.load(path_HQ, map_location="cpu", weights_only=False)["state_dict"]
         HQ_keys = list(sd_HQ.keys())
         # load LQ checkpoint
-        sd_LQ = torch.load(path_LQ, map_location="cpu")["state_dict"]
+        sd_LQ = torch.load(path_LQ, map_location="cpu", weights_only=False)["state_dict"]
         LQ_keys = list(sd_LQ.keys())
 
         print('HQ keys number =',len(HQ_keys))

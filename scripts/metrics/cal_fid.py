@@ -63,7 +63,7 @@ def calculate_fid_folder():
     sample_cov = np.cov(features, rowvar=False)
 
     # load the dataset stats
-    stats = torch.load(args.fid_stats)
+    stats = torch.load(args.fid_stats, weights_only=False)
     real_mean = stats['mean']
     real_cov = stats['cov']
 
