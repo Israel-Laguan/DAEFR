@@ -1,0 +1,117 @@
+model:
+  base_learning_rate: 4.5e-6 
+  max_epochs: 100
+  precision: 16
+  use_gradient_checkpointing: false  # Disabled for B200 (192GB VRAM)
+  target: DAEFR.models.daefr.DAEFRModel
+  params:
+    image_key: 'lq'
+    # HQ codebook path
+    ckpt_path_HQ: './experiments/HQ_codebook.ckpt'
+    # Association model path
+    ckpt_path_LQ: './experiments/Association_stage.ckpt'
+    special_params_lr_scale: 1
+    comp_params_lr_scale: 10
+    schedule_step: [4000000, 8000000]
+    ddconfig:
+      target: DAEFR.modules.vqvae.vqvae_arch.VQVAEGANMERGE
+      params:
+        embed_dim: 256
+        n_embed: 1024
+        double_z: False
+        z_channels: 256
+        resolution: 512
+        in_channels: 3
+        out_ch: 3
+        ch: 64
+        ch_mult: [ 1,2,2,4,4,8]  # num_down = len(ch_mult)-1
+        num_res_blocks: 2
+        dropout: 0.0
+        attn_resolutions: [16]
+        enable_mid: True
+
+        fix_decoder: False
+        fix_codebook: False
+        fix_encoder: False
+        # head_size: 8
+
+    lossconfig:
+      target: DAEFR.modules.losses.vqperceptual.VQLPIPSWithDiscriminatorWithCompWithIdentity
+      params:
+        disc_conditional: False
+        disc_in_channels: 3
+        disc_start: 10001
+        disc_weight: 0.8
+        codebook_weight: 1.0
+        use_actnorm: False
+
+
+data:
+  target: main_DAEFR.DataModuleFromConfig
+  params:
+    batch_size: 16
+    num_workers: 8  # Lower since data loading is fast
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+    train:
+      target: DAEFR.data.ffhq_degradation_dataset_LQ.FFHQDegradationDatasetCached
+      params:
+        dataroot_gt: ./datasets/FFHQ/images512x512
+        dataroot_lq: ./datasets/FFHQ/images512x512_LQ  # Pre-computed degraded images
+        io_backend:
+          type: disk
+        use_hflip: True
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+        out_size: 512
+
+        # These are not used but required for config compatibility
+        blur_kernel_size: [19,20]
+        kernel_list: ['iso', 'aniso']
+        kernel_prob: [0.5, 0.5]
+        blur_sigma: [0.1, 15]
+        downsample_range: [0.8, 30]
+        noise_range: [0, 20]
+        jpeg_range: [30, 100]
+
+        color_jitter_prob: ~
+        color_jitter_shift: 20
+        color_jitter_pt_prob: ~
+        gray_prob: ~
+        gt_gray: True
+
+        crop_components: True
+        component_path: experiments/pretrained_models/FFHQ_eye_mouth_landmarks_512.pth
+        eye_enlarge_ratio: 1.4
+
+
+    validation:
+      target: DAEFR.data.ffhq_degradation_dataset.FFHQDegradationDataset
+      params:
+        dataroot_gt: ./datasets/FFHQ/images512x512_validation
+        io_backend:
+          type: disk
+        use_hflip: False
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+        out_size: 512
+
+        blur_kernel_size: [19,20]
+        kernel_list: ['iso', 'aniso']
+        kernel_prob: [0.5, 0.5]
+        blur_sigma: [0.1, 15]
+        downsample_range: [0.8, 30]
+        noise_range: [0, 20]
+        jpeg_range: [30, 100]
+
+        # color jitter and gray
+        color_jitter_prob: ~
+        color_jitter_shift: 20
+        color_jitter_pt_prob: ~
+        gray_prob: ~
+        gt_gray: True
+
+        crop_components: False
+        component_path: experiments/pretrained_models/FFHQ_eye_mouth_landmarks_512.pth
+        eye_enlarge_ratio: 1.4

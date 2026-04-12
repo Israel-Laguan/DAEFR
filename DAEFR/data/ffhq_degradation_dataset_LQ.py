@@ -304,6 +304,118 @@ class FFHQDegradationDataset(data.Dataset):
 
         return return_dict
 
+@DATASET_REGISTRY.register()
+class FFHQDegradationDatasetCached(data.Dataset):
+    """Fast dataset that loads pre-computed LQ images from disk.
+    
+    Use this for training after running precompute_degradations.py.
+    10x+ speedup vs on-the-fly degradation generation.
+    """
+
+    def __init__(self, opt):
+        super().__init__()
+        self.opt = opt
+        self.file_client = None
+        self.io_backend_opt = opt['io_backend']
+
+        self.gt_folder = opt['dataroot_gt']
+        self.lq_folder = opt['dataroot_lq']  # Pre-computed LQ images
+        self.mean = opt['mean']
+        self.std = opt['std']
+        self.out_size = opt['out_size']
+
+        self.crop_components = opt.get('crop_components', False)
+        self.eye_enlarge_ratio = opt.get('eye_enlarge_ratio', 1)
+
+        if self.crop_components:
+            self.components_list = torch.load(opt.get('component_path'), weights_only=False)
+
+        if self.io_backend_opt['type'] == 'lmdb':
+            raise NotImplementedError("LMDB not supported for cached dataset")
+        else:
+            self.paths = paths_from_folder(self.gt_folder)
+
+        logger = get_root_logger()
+        logger.info(f'FFHQDegradationDatasetCached: {len(self.paths)} samples')
+        logger.info(f'  GT folder: {self.gt_folder}')
+        logger.info(f'  LQ folder: {self.lq_folder}')
+
+    def __getitem__(self, index):
+        if self.file_client is None:
+            self.file_client = FileClient(self.io_backend_opt.pop('type'), **self.io_backend_opt)
+
+        # Load GT image
+        gt_path = self.paths[index]
+        img_bytes = self.file_client.get(gt_path)
+        img_gt = imfrombytes(img_bytes, float32=True)
+
+        # Random horizontal flip (must match pre-computation flip)
+        img_gt, status = augment(img_gt, hflip=self.opt['use_hflip'], rotation=False, return_status=True)
+        h, w, _ = img_gt.shape
+
+        if self.crop_components:
+            locations = self.get_component_coordinates(index, status)
+            loc_left_eye, loc_right_eye, loc_mouth = locations
+
+        # Load pre-computed LQ image (same name as GT)
+        lq_path = os.path.join(self.lq_folder, os.path.basename(gt_path))
+        lq_bytes = self.file_client.get(lq_path)
+        img_lq = imfrombytes(lq_bytes, float32=True)
+
+        # Apply same flip to LQ
+        if status[0]:  # hflip was applied
+            img_lq = cv2.flip(img_lq, 1)
+
+        # Resize if needed
+        if (h != self.out_size) and (w != self.out_size):
+            img_lq = cv2.resize(img_lq, (self.out_size, self.out_size), interpolation=cv2.INTER_LINEAR)
+            img_gt = cv2.resize(img_gt, (self.out_size, self.out_size), interpolation=cv2.INTER_LINEAR)
+
+        # Convert to tensors
+        img_gt, img_lq = img2tensor([img_gt, img_lq], bgr2rgb=True, float32=True)
+
+        # Normalize
+        normalize(img_gt, self.mean, self.std, inplace=True)
+        normalize(img_lq, self.mean, self.std, inplace=True)
+
+        return_dict = {
+            'lq': img_lq,
+            'gt': img_gt,
+            'gt_path': gt_path
+        }
+        if self.crop_components:
+            return_dict['loc_left_eye'] = loc_left_eye
+            return_dict['loc_right_eye'] = loc_right_eye
+            return_dict['loc_mouth'] = loc_mouth
+
+        return return_dict
+
+    def __len__(self):
+        return len(self.paths)
+
+    def get_component_coordinates(self, index, status):
+        """Same as parent class - needed for crop_components"""
+        components_bbox = self.components_list[f'{index:08d}']
+        if status[0]:  # hflip
+            tmp = components_bbox['left_eye']
+            components_bbox['left_eye'] = components_bbox['right_eye']
+            components_bbox['right_eye'] = tmp
+            components_bbox['left_eye'][0] = self.out_size - components_bbox['left_eye'][0]
+            components_bbox['right_eye'][0] = self.out_size - components_bbox['right_eye'][0]
+            components_bbox['mouth'][0] = self.out_size - components_bbox['mouth'][0]
+
+        locations = []
+        for part in ['left_eye', 'right_eye', 'mouth']:
+            mean = components_bbox[part][0:2]
+            half_len = components_bbox[part][2]
+            if 'eye' in part:
+                half_len *= self.eye_enlarge_ratio
+            loc = np.hstack((mean - half_len + 1, mean + half_len))
+            loc = torch.from_numpy(loc).float()
+            locations.append(loc)
+        return locations
+
+
 import argparse
 from omegaconf import OmegaConf
 import pdb
