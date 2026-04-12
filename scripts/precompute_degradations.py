@@ -29,6 +29,8 @@ def init_worker(config_path, split):
     # Limit OpenCV and OpenMP threads per worker to prevent resource exhaustion
     import cv2
     cv2.setNumThreads(1)  # Single thread per worker
+    # Silence OpenCV warnings in workers
+    cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)  # Only show errors, not warnings
     os.environ['OMP_NUM_THREADS'] = '1'
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
     os.environ['MKL_NUM_THREADS'] = '1'
@@ -93,6 +95,7 @@ def main():
     # Set thread limits at startup for main process too
     import cv2
     cv2.setNumThreads(1)  # Further reduce to 1 thread per process
+    cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)  # Silence warnings in main process too
     os.environ['OMP_NUM_THREADS'] = '1'
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
     os.environ['MKL_NUM_THREADS'] = '1'
@@ -176,9 +179,9 @@ def main():
         for i, result in enumerate(pool.imap_unordered(process_batch, work_items, chunksize=1)):
             total_processed += len(result['processed'])
             failed_items.extend(result['failed'])
-            # Manual progress update (more reliable than tqdm for large batches)
-            if (i + 1) % 10 == 0 or i == num_batches - 1:
-                print(f"\rProgress: {i + 1}/{num_batches} batches ({(i+1)*100//num_batches}%) - {total_processed} images", end='', flush=True)
+            # Manual progress update every batch for responsive display
+            pct = (i + 1) * 100 // num_batches
+            print(f"\rProgress: {i + 1}/{num_batches} ({pct}%) | Images: {total_processed} | Failed: {len(failed_items)}    ", end='', flush=True)
     
     print()  # New line after progress
     
