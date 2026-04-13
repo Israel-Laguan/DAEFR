@@ -92,13 +92,19 @@ fi
 # Set token
 export HF_TOKEN="$HF_TOKEN"
 
+# Build private flag (only add if true)
+PRIVATE_FLAG=""
+if [ "$PRIVATE" = true ]; then
+    PRIVATE_FLAG="--private"
+fi
+
 # Step 1: Initialize repo with README (do this before training)
 if [ "$INIT_MODE" = true ]; then
     echo "Initializing repository with README..."
     python upload_checkpoint_to_hf.py \
         --init \
         --repo-id "$REPO_ID" \
-        --private "$PRIVATE" \
+        $PRIVATE_FLAG \
         --epochs "$EPOCHS" \
         --final-checkpoint "$FINAL_CHECKPOINT"
     
@@ -126,7 +132,7 @@ if [ "$UPLOAD_ALL" = true ]; then
         --upload-all \
         --experiments-dir "$CHECKPOINT_DIR" \
         --repo-id "$REPO_ID" \
-        --private "$PRIVATE" \
+        $PRIVATE_FLAG \
         $PRESERVE_STRUCTURE
     
     if [ $? -eq 0 ]; then
