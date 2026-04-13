@@ -3,18 +3,26 @@
 Sanity check script - Test multiple checkpoints on a single image.
 
 Usage:
-    # Test all checkpoints in a folder on a single image
+    # Test all checkpoints on a HQ image (no degradation)
     python scripts/sanity_check_checkpoints.py \
         --checkpoint-dir ./experiments/2026-04-13T11-59-20_DAEFR_predegraded/ \
         --config configs/DAEFR.yaml \
         --input ./datasets/FFHQ/images512x512_validation/celeba_512_validation/00000000.png \
         --output ./sanity_check_results
     
-    # Or specify a degraded/low-quality input image
+    # Test on synthetically degraded image (better for showing restoration)
     python scripts/sanity_check_checkpoints.py \
         --checkpoint-dir ./experiments/2026-04-13T11-59-20_DAEFR_predegraded/ \
         --config configs/DAEFR.yaml \
-        --input ./test_image.jpg \
+        --input ./datasets/FFHQ/images512x512_validation/celeba_512_validation/00000000.png \
+        --output ./sanity_check_results \
+        --degrade
+    
+    # Or use a pre-degraded low-quality image
+    python scripts/sanity_check_checkpoints.py \
+        --checkpoint-dir ./experiments/2026-04-13T11-59-20_DAEFR_predegraded/ \
+        --config configs/DAEFR.yaml \
+        --input ./datasets/ffhq32/00000.png \
         --output ./sanity_check_results
 """
 
@@ -101,7 +109,35 @@ def load_model(checkpoint_path, config_path):
     return model, config
 
 
-def run_inference(model, face_helper, input_path, output_dir, suffix=None):
+def apply_degradation(img, blur_kernel_size=21, noise_sigma=15, jpeg_quality=50, downsample_factor=4):
+    """Apply synthetic degradation to image to simulate low-quality input."""
+    h, w = img.shape[:2]
+    
+    # Downsample then upsample (simulates low resolution)
+    if downsample_factor > 1:
+        small_h, small_w = h // downsample_factor, w // downsample_factor
+        img = cv2.resize(img, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+        img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
+    
+    # Gaussian blur
+    if blur_kernel_size > 1:
+        img = cv2.GaussianBlur(img, (blur_kernel_size, blur_kernel_size), 0)
+    
+    # Add noise
+    if noise_sigma > 0:
+        noise = np.random.normal(0, noise_sigma, img.shape).astype(np.float32)
+        img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    
+    # JPEG compression artifacts
+    if jpeg_quality < 100:
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+        _, encimg = cv2.imencode('.jpg', img, encode_param)
+        img = cv2.imdecode(encimg, 1)
+    
+    return img
+
+
+def run_inference(model, face_helper, input_path, output_dir, suffix=None, degraded_input=None):
     """Run inference on a single image."""
     
     # Read image
@@ -114,6 +150,10 @@ def run_inference(model, face_helper, input_path, output_dir, suffix=None):
     
     # Resize to 512x512 (model expects this size)
     input_img = cv2.resize(input_img, (512, 512))
+    
+    # Use degraded version if provided
+    if degraded_input is not None:
+        input_img = degraded_input
     
     face_helper.clean_all()
     face_helper.cropped_faces = [input_img]
@@ -181,6 +221,8 @@ def main():
                         help="Output directory for results (default: ./sanity_check_results)")
     parser.add_argument("--gpu", type=int, default=0,
                         help="GPU ID to use (default: 0)")
+    parser.add_argument("--degrade", action="store_true",
+                        help="Apply synthetic degradation to input (blur, noise, JPEG) for better restoration test")
     
     args = parser.parse_args()
     
@@ -233,6 +275,20 @@ def main():
         save_ext='png'
     )
     
+    # Prepare degraded input if requested
+    degraded_input = None
+    if args.degrade:
+        print("Applying synthetic degradation to input image...")
+        input_img = cv2.imread(args.input, cv2.IMREAD_COLOR)
+        input_img = cv2.resize(input_img, (512, 512))
+        degraded_input = apply_degradation(input_img)
+        
+        # Save degraded input for reference
+        degraded_path = os.path.join(args.output, "degraded_input.png")
+        cv2.imwrite(degraded_path, degraded_input)
+        print(f"  ✓ Saved degraded input: {degraded_path}")
+        print()
+    
     # Process with each checkpoint
     results = []
     
@@ -252,8 +308,8 @@ def main():
             # Load model
             model, config = load_model(ckpt_path, args.config)
             
-            # Run inference
-            output_path = run_inference(model, face_helper, args.input, args.output, suffix)
+            # Run inference (with degraded input if --degrade was used)
+            output_path = run_inference(model, face_helper, args.input, args.output, suffix, degraded_input)
             
             results.append({
                 'checkpoint': ckpt_name,

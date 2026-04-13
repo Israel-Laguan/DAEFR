@@ -84,6 +84,8 @@ class DAEFRModel(pl.LightningModule):
         if self.image_key != 'gt':
             x = batch['gt']
 
+        batch_size = x.shape[0]
+
         if self.use_facial_disc:
             loc_left_eyes = batch['loc_left_eye']
             loc_right_eyes = batch['loc_right_eye']
@@ -100,23 +102,23 @@ class DAEFRModel(pl.LightningModule):
 
             Code_loss = log_dict_ae["train/quant_loss"]
             self.log("Codebook_loss", Code_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
             Rec_loss = log_dict_ae["train/rec_loss"]
             self.log("Rec_loss", Rec_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)        
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)        
             
             
-            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return aeloss
 
         if optimizer_idx == 1:
             # discriminator
             discloss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
                                             last_layer=None, split="train")
-            self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-            self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+            self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return discloss
 
         
@@ -127,8 +129,8 @@ class DAEFRModel(pl.LightningModule):
                 # discriminator
                 disc_left_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
                                                 last_layer=None, split="train")
-                self.log("train/disc_left_loss", disc_left_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+                self.log("train/disc_left_loss", disc_left_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
                 return disc_left_loss
 
             # right eye
@@ -136,8 +138,8 @@ class DAEFRModel(pl.LightningModule):
                 # discriminator
                 disc_right_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
                                                 last_layer=None, split="train")
-                self.log("train/disc_right_loss", disc_right_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+                self.log("train/disc_right_loss", disc_right_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
                 return disc_right_loss
 
             # mouth
@@ -145,8 +147,8 @@ class DAEFRModel(pl.LightningModule):
                 # discriminator
                 disc_mouth_loss, log_dict_disc = self.loss(qloss, x, xrec, components, optimizer_idx, self.global_step,
                                                 last_layer=None, split="train")
-                self.log("train/disc_mouth_loss", disc_mouth_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+                self.log("train/disc_mouth_loss", disc_mouth_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
+                self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
                 return disc_mouth_loss
 
     def validation_step(self, batch, batch_idx):
@@ -162,12 +164,13 @@ class DAEFRModel(pl.LightningModule):
         discloss, log_dict_disc = self.loss(qloss, x, xrec, None, 1, self.global_step,
                                             last_layer=None, split="val")
         rec_loss = log_dict_ae["val/rec_loss"]
+        val_batch_size = x.shape[0]
         self.log("val/rec_loss", rec_loss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         self.log("val/aeloss", aeloss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
-        self.log_dict(log_dict_ae)
-        self.log_dict(log_dict_disc)
+        self.log_dict(log_dict_ae, batch_size=val_batch_size, sync_dist=True)
+        self.log_dict(log_dict_disc, batch_size=val_batch_size, sync_dist=True)
 
         return self.log_dict
 

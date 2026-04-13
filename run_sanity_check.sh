@@ -5,6 +5,9 @@
 #   # Edit CONFIG and CHECKPOINT_DIR below, then:
 #   ./run_sanity_check.sh
 #
+#   # Test with degraded input (better for showing restoration):
+#   ./run_sanity_check.sh --degrade
+#
 #   # Or override defaults:
 #   ./run_sanity_check.sh --checkpoint-dir ./experiments/2026-04-13T11-59-20_DAEFR_predegraded/
 
@@ -14,6 +17,7 @@ CONFIG="configs/DAEFR.yaml"                                             # Model 
 INPUT_IMAGE="./datasets/FFHQ/images512x512_validation/celeba_512_validation/00000000.png"  # Test image
 OUTPUT_DIR="./sanity_check_results"                                     # Where to save results
 GPU="0"                                                                 # GPU ID
+DEGRADE=""                                                              # Set to "--degrade" to apply degradation
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -44,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             GPU="$2"
             shift 2
             ;;
+        --degrade)
+            DEGRADE="--degrade"
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -53,6 +61,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --input <path>            Input test image"
             echo "  --output <path>           Output directory for results"
             echo "  --gpu <id>                GPU ID to use (default: 0)"
+            echo "  --degrade                 Apply synthetic degradation to input"
             echo "  --help, -h                Show this help message"
             exit 0
             ;;
@@ -90,6 +99,9 @@ echo "  Config: $CONFIG"
 echo "  Input image: $INPUT_IMAGE"
 echo "  Output dir: $OUTPUT_DIR"
 echo "  GPU: $GPU"
+if [ -n "$DEGRADE" ]; then
+    echo "  Degradation: ENABLED (blur + noise + JPEG)"
+fi
 echo ""
 
 # Run sanity check
@@ -98,7 +110,8 @@ python scripts/sanity_check_checkpoints.py \
     --config "$CONFIG" \
     --input "$INPUT_IMAGE" \
     --output "$OUTPUT_DIR" \
-    --gpu "$GPU"
+    --gpu "$GPU" \
+    $DEGRADE
 
 if [ $? -eq 0 ]; then
     echo ""

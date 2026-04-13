@@ -250,8 +250,16 @@ def upload_to_huggingface(checkpoint_path, repo_id, token=None, private=False):
         sys.exit(1)
 
 
-def upload_all_checkpoints(experiments_dir, repo_id, token=None, private=False):
-    """Upload all checkpoints from experiment folder to Hugging Face."""
+def upload_all_checkpoints(experiments_dir, repo_id, token=None, private=False, preserve_structure=True):
+    """Upload all checkpoints from experiment folder to Hugging Face.
+    
+    Args:
+        experiments_dir: Path to experiment folder containing checkpoints
+        repo_id: HuggingFace repo ID
+        token: HF token
+        private: Make repo private
+        preserve_structure: If True, upload to subfolder named after experiments_dir basename
+    """
     
     try:
         from huggingface_hub import HfApi, create_repo
@@ -260,6 +268,17 @@ def upload_all_checkpoints(experiments_dir, repo_id, token=None, private=False):
         sys.exit(1)
     
     import re
+    
+    experiments_path = Path(experiments_dir)
+    
+    # Determine the subfolder name in HF repo
+    if preserve_structure:
+        # Use the leaf folder name (e.g., "2026-04-13T11-59-20_DAEFR_predegraded")
+        hf_subfolder = experiments_path.name
+        print(f"Preserving folder structure: uploading to '{hf_subfolder}/' subfolder")
+    else:
+        hf_subfolder = None
+        print("Flat upload: all files at root level")
     
     # Find all checkpoint files
     patterns = [
@@ -306,41 +325,56 @@ def upload_all_checkpoints(experiments_dir, repo_id, token=None, private=False):
     
     for checkpoint_path in checkpoints_to_upload:
         ckpt_name = os.path.basename(checkpoint_path)
+        
+        # Set path in repo (with subfolder if preserving structure)
+        if hf_subfolder:
+            path_in_repo = f"{hf_subfolder}/{ckpt_name}"
+        else:
+            path_in_repo = ckpt_name
+        
         print(f"\nUploading {ckpt_name}...")
         
         try:
             api.upload_file(
                 path_or_fileobj=checkpoint_path,
-                path_in_repo=ckpt_name,
+                path_in_repo=path_in_repo,
                 repo_id=repo_id,
                 repo_type="model",
                 token=token
             )
-            print(f"  ✓ Uploaded {ckpt_name}")
+            print(f"  ✓ Uploaded {path_in_repo}")
         except Exception as e:
-            print(f"  ✗ Failed to upload {ckpt_name}: {e}")
+            print(f"  ✗ Failed to upload {path_in_repo}: {e}")
     
-    # Upload config
-    config_path = Path(experiments_dir) / "DAEFR.yaml"
+    # Upload config (to subfolder if preserving structure)
+    config_path = experiments_path / "DAEFR.yaml"
     if not config_path.exists():
         config_path = Path("./configs/DAEFR.yaml")
     
     if config_path.exists():
-        print(f"\nUploading config: {config_path.name}")
+        config_name = config_path.name
+        if hf_subfolder:
+            config_path_in_repo = f"{hf_subfolder}/{config_name}"
+        else:
+            config_path_in_repo = config_name
+        
+        print(f"\nUploading config: {config_name}")
         try:
             api.upload_file(
                 path_or_fileobj=str(config_path),
-                path_in_repo="DAEFR.yaml",
+                path_in_repo=config_path_in_repo,
                 repo_id=repo_id,
                 repo_type="model",
                 token=token
             )
-            print(f"  ✓ Uploaded config")
+            print(f"  ✓ Uploaded {config_path_in_repo}")
         except Exception as e:
             print(f"  ✗ Failed to upload config: {e}")
     
     print(f"\n{'='*50}")
     print(f"All uploads complete: https://huggingface.co/{repo_id}")
+    if hf_subfolder:
+        print(f"Files uploaded to: {hf_subfolder}/")
     print(f"{'='*50}")
 
 
@@ -367,6 +401,10 @@ def main():
                         help="Number of training epochs (for README)")
     parser.add_argument("--upload-all", action="store_true",
                         help="Upload ALL checkpoints from the experiment folder (not just best)")
+    parser.add_argument("--preserve-structure", action="store_true", default=True,
+                        help="Preserve folder structure when uploading (default: True)")
+    parser.add_argument("--flat", action="store_true",
+                        help="Upload files flat without folder structure (overrides --preserve-structure)")
     
     args = parser.parse_args()
     
@@ -385,7 +423,9 @@ def main():
     # Handle --upload-all flag (upload all checkpoints from folder)
     if args.upload_all:
         print(f"Uploading ALL checkpoints from {args.experiments_dir}...")
-        upload_all_checkpoints(args.experiments_dir, args.repo_id, token, args.private)
+        # --flat overrides --preserve-structure
+        preserve_structure = args.preserve_structure and not args.flat
+        upload_all_checkpoints(args.experiments_dir, args.repo_id, token, args.private, preserve_structure)
         return
     
     # Determine which checkpoint to use (single upload)

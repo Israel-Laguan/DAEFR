@@ -220,6 +220,8 @@ class DAEFRModel(pl.LightningModule):
         # if self.image_key != 'gt':
         #     x = batch['gt']
 
+        batch_size = x.shape[0]
+
         if self.use_facial_disc:
             loc_left_eyes = batch['loc_left_eye']
             loc_right_eyes = batch['loc_right_eye']
@@ -239,16 +241,16 @@ class DAEFRModel(pl.LightningModule):
 
             HQ_CLIP_loss = HQ_log_dict_ae["train/CLIP_loss"]
             self.log("Associate_loss", HQ_CLIP_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
             HQ_Rec_loss = HQ_log_dict_ae["train/rec_loss"]
             self.log("HQ_Rec_loss", HQ_Rec_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
             self.log("train/HQ_aeloss", HQ_aeloss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(HQ_log_dict_ae, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return HQ_aeloss
 
         if optimizer_idx == 1:
@@ -257,9 +259,9 @@ class DAEFRModel(pl.LightningModule):
                                                 CLIP_loss,
                                                 last_layer=None, split="train")
             self.log("train/HQ_discloss", HQ_discloss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(HQ_log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return HQ_discloss
 
         # LQ part
@@ -271,16 +273,16 @@ class DAEFRModel(pl.LightningModule):
 
             LQ_CLIP_loss = LQ_log_dict_ae["train/CLIP_loss"]
             self.log("LQ_Associate_loss", LQ_CLIP_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             
             LQ_Rec_loss = LQ_log_dict_ae["train/rec_loss"]
             self.log("LQ_Rec_loss", LQ_Rec_loss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             
             self.log("train/LQ_aeloss", LQ_aeloss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(LQ_log_dict_ae, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return LQ_aeloss
 
         if optimizer_idx == 3:
@@ -289,9 +291,9 @@ class DAEFRModel(pl.LightningModule):
                                                 CLIP_loss,
                                                 last_layer=None, split="train")
             self.log("train/LQ_discloss", LQ_discloss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(LQ_log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             return LQ_discloss
 
     def validation_step(self, batch, batch_idx):
@@ -332,10 +334,11 @@ class DAEFRModel(pl.LightningModule):
         self.log("val/LQ_aeloss", LQ_aeloss,
                  prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         
-        self.log_dict(HQ_log_dict_ae)
-        self.log_dict(HQ_log_dict_disc)
-        self.log_dict(LQ_log_dict_ae)
-        self.log_dict(LQ_log_dict_disc)
+        val_batch_size = x.shape[0]
+        self.log_dict(HQ_log_dict_ae, batch_size=val_batch_size, sync_dist=True)
+        self.log_dict(HQ_log_dict_disc, batch_size=val_batch_size, sync_dist=True)
+        self.log_dict(LQ_log_dict_ae, batch_size=val_batch_size, sync_dist=True)
+        self.log_dict(LQ_log_dict_disc, batch_size=val_batch_size, sync_dist=True)
 
         return self.log_dict
 

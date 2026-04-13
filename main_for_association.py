@@ -184,13 +184,10 @@ class DataModuleFromConfig(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         if train is not None:
             self.dataset_configs["train"] = train
-            self.train_dataloader = self._train_dataloader
         if validation is not None:
             self.dataset_configs["validation"] = validation
-            self.val_dataloader = self._val_dataloader
         if test is not None:
             self.dataset_configs["test"] = test
-            self.test_dataloader = self._test_dataloader
         self.wrap = wrap
 
     def prepare_data(self):
@@ -205,18 +202,24 @@ class DataModuleFromConfig(pl.LightningDataModule):
             for k in self.datasets:
                 self.datasets[k] = WrappedDataset(self.datasets[k])
 
-    def _train_dataloader(self):
+    def train_dataloader(self):
+        if "train" not in self.dataset_configs:
+            return None
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
                           num_workers=self.num_workers, shuffle=True,
                           pin_memory=self.pin_memory, persistent_workers=self.persistent_workers)
 
-    def _val_dataloader(self):
+    def val_dataloader(self):
+        if "validation" not in self.dataset_configs:
+            return None
         return DataLoader(self.datasets["validation"],
                           batch_size=self.batch_size,
                           num_workers=self.num_workers,
                           pin_memory=self.pin_memory)
 
-    def _test_dataloader(self):
+    def test_dataloader(self):
+        if "test" not in self.dataset_configs:
+            return None
         return DataLoader(self.datasets["test"], batch_size=self.batch_size,
                           num_workers=self.num_workers,
                           pin_memory=self.pin_memory)
@@ -347,12 +350,156 @@ class ImageLogger(Callback):
             return True
         return False
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, batch_idx_in_epoch=0, dataloader_idx=0):
         self.log_img(pl_module, batch, batch_idx, split="train")
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         self.log_img(pl_module, batch, batch_idx, split="val")
 
+
+class TrainingProgressCallback(Callback):
+    """Callback to track and display training progress including dataset size, steps per epoch, and estimated completion."""
+    
+    def __init__(self):
+        super().__init__()
+        self.start_time = None
+        self.dataset_size = None
+        self.steps_per_epoch = None
+        self.total_steps = None
+        self.printed_header = False
+        self.resumed_from_checkpoint = False
+    
+    def on_load_checkpoint(self, trainer, pl_module, callback_state):
+        """Restore callback state from checkpoint."""
+        self.start_time = callback_state.get("start_time", None)
+        self.dataset_size = callback_state.get("dataset_size", None)
+        self.steps_per_epoch = callback_state.get("steps_per_epoch", None)
+        self.total_steps = callback_state.get("total_steps", None)
+        self.printed_header = callback_state.get("printed_header", False)
+        self.resumed_from_checkpoint = True
+        # Convert start_time string back to datetime if it exists
+        if self.start_time is not None and isinstance(self.start_time, str):
+            self.start_time = datetime.datetime.fromisoformat(self.start_time)
+    
+    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        """Save callback state to checkpoint."""
+        return {
+            "start_time": self.start_time.isoformat() if self.start_time is not None else None,
+            "dataset_size": self.dataset_size,
+            "steps_per_epoch": self.steps_per_epoch,
+            "total_steps": self.total_steps,
+            "printed_header": self.printed_header,
+        }
+    
+    def on_train_start(self, trainer, pl_module):
+        """Log dataset and training configuration at start of training."""
+        if trainer.global_rank != 0:
+            return
+            
+        # Only set start_time if not resuming from checkpoint (preserve original start time)
+        if not self.resumed_from_checkpoint:
+            self.start_time = datetime.datetime.now()
+            self.resumed_from_checkpoint = False  # Reset for future training runs
+        
+        # Get dataset info from datamodule
+        datamodule = trainer.datamodule
+        if datamodule is None:
+            return
+            
+        # Get training dataloader
+        train_loader = datamodule.train_dataloader()
+        if train_loader is None:
+            return
+            
+        # Get dataset size
+        if hasattr(train_loader, 'dataset') and train_loader.dataset is not None:
+            self.dataset_size = len(train_loader.dataset)
+        else:
+            self.dataset_size = None
+            
+        # Get training configuration
+        batch_size = datamodule.batch_size
+        num_gpus = trainer.num_devices if hasattr(trainer, 'num_devices') else max(1, trainer.num_nodes * (len(trainer.device_ids) if hasattr(trainer, 'device_ids') else 1))
+        max_epochs = trainer.max_epochs
+        accumulate_grad_batches = trainer.accumulate_grad_batches if hasattr(trainer, 'accumulate_grad_batches') else 1
+        
+        # Calculate steps
+        if self.dataset_size is not None:
+            effective_batch_size = batch_size * num_gpus * accumulate_grad_batches
+            self.steps_per_epoch = (self.dataset_size + effective_batch_size - 1) // effective_batch_size  # Ceiling division
+            self.total_steps = self.steps_per_epoch * max_epochs
+            
+            # Print training configuration
+            print("\n" + "="*70)
+            print("TRAINING CONFIGURATION")
+            print("="*70)
+            print(f"Dataset size:           {self.dataset_size:,} images")
+            print(f"Batch size:             {batch_size}")
+            print(f"Number of GPUs:         {num_gpus}")
+            print(f"Accumulate grad batches: {accumulate_grad_batches}")
+            print(f"Effective batch size:   {effective_batch_size}")
+            print(f"Steps per epoch:        {self.steps_per_epoch:,}")
+            print(f"Max epochs:             {max_epochs}")
+            print(f"Total training steps:   {self.total_steps:,}")
+            print("="*70)
+            self.printed_header = True
+    
+    def on_train_epoch_start(self, trainer, pl_module):
+        """Log epoch start with progress information."""
+        if trainer.global_rank != 0 or not self.printed_header:
+            return
+            
+        current_epoch = trainer.current_epoch
+        max_epochs = trainer.max_epochs
+        global_step = trainer.global_step
+        
+        epoch_pct = (current_epoch / max_epochs) * 100
+        
+        if self.total_steps is not None and self.total_steps > 0:
+            step_pct = (global_step / self.total_steps) * 100
+            
+            # Calculate estimated time remaining
+            if self.start_time is not None and global_step > 0:
+                elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+                time_per_step = elapsed / global_step
+                steps_remaining = self.total_steps - global_step
+                eta_seconds = steps_remaining * time_per_step
+                eta_str = self._format_time(eta_seconds)
+                
+                print(f"\nEpoch {current_epoch}/{max_epochs} ({epoch_pct:.1f}% of epochs) | "
+                      f"Step {global_step:,}/{self.total_steps:,} ({step_pct:.1f}%) | "
+                      f"ETA: {eta_str}")
+            else:
+                print(f"\nEpoch {current_epoch}/{max_epochs} ({epoch_pct:.1f}% of epochs) | "
+                      f"Step {global_step:,}/{self.total_steps:,} ({step_pct:.1f}%)")
+    
+    def on_train_end(self, trainer, pl_module):
+        """Log final training statistics."""
+        if trainer.global_rank != 0 or not self.printed_header:
+            return
+            
+        if self.start_time is not None:
+            total_time = (datetime.datetime.now() - self.start_time).total_seconds()
+            time_str = self._format_time(total_time)
+            print(f"\nTraining completed in {time_str}")
+            print(f"Final step: {trainer.global_step:,}/{self.total_steps:,}")
+    
+    def _format_time(self, seconds):
+        """Format seconds into human-readable time string."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}m {secs}s"
+        elif seconds < 86400:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            return f"{hours}h {minutes}m"
+        else:
+            days = int(seconds // 86400)
+            hours = int((seconds % 86400) // 3600)
+            return f"{days}d {hours}h"
 
 
 if __name__ == "__main__":
@@ -579,6 +726,10 @@ if __name__ == "__main__":
                     "logging_interval": "step",
                     #"log_momentum": True
                 }
+            },
+            "training_progress": {
+                "target": "main_for_association.TrainingProgressCallback",
+                "params": {}
             },
         }
         callbacks_cfg = lightning_config.get("callbacks") or OmegaConf.create()

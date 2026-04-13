@@ -8,6 +8,9 @@
 #   # Step 2: Upload final checkpoint after training
 #   ./upload_final_model.sh
 #
+#   # Upload all checkpoints from folder, preserving structure
+#   ./upload_final_model.sh --upload-all
+#
 # Or in one command after training:
 #   ./upload_final_model.sh --checkpoint ./experiments/DAEFR_model.ckpt
 
@@ -28,6 +31,8 @@ NC='\033[0m' # No Color
 INIT_MODE=false
 CHECKPOINT_ARG=""
 USE_BEST_EPOCH=true  # Default: find highest epoch checkpoint (e.g., epoch=000048)
+UPLOAD_ALL=false   # Upload all checkpoints from folder
+PRESERVE_STRUCTURE="--preserve-structure"  # Default: preserve folder structure
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -48,12 +53,23 @@ while [[ $# -gt 0 ]]; do
             USE_BEST_EPOCH=false
             shift
             ;;
+        --upload-all)
+            UPLOAD_ALL=true
+            USE_BEST_EPOCH=false
+            shift
+            ;;
+        --flat)
+            PRESERVE_STRUCTURE=""
+            shift
+            ;;
         --help|-h)
             echo "Usage:"
             echo "  $0 --init                    # Initialize repo with README before training"
             echo "  $0                           # Upload checkpoint with highest epoch number (default)"
             echo "  $0 --checkpoint <path>       # Upload specific checkpoint"
             echo "  $0 --use-latest-time         # Find by modification time instead of epoch"
+            echo "  $0 --upload-all              # Upload ALL checkpoints from folder (preserves structure)"
+            echo "  $0 --flat                    # Upload flat (no subfolders, overrides --upload-all structure)"
             exit 0
             ;;
         *)
@@ -100,6 +116,35 @@ if [ "$INIT_MODE" = true ]; then
 fi
 
 # Step 2: Upload final checkpoint (auto-find or use specified)
+if [ "$UPLOAD_ALL" = true ]; then
+    echo "Uploading ALL checkpoints from $CHECKPOINT_DIR..."
+    echo "This will preserve folder structure in HF repo."
+    echo ""
+    
+    # Run upload-all with preserved structure
+    python upload_checkpoint_to_hf.py \
+        --upload-all \
+        --experiments-dir "$CHECKPOINT_DIR" \
+        --repo-id "$REPO_ID" \
+        --private "$PRIVATE" \
+        $PRESERVE_STRUCTURE
+    
+    if [ $? -eq 0 ]; then
+        echo ""
+        echo -e "${GREEN}===========================================${NC}"
+        echo -e "${GREEN}  All Checkpoints Uploaded!${NC}"
+        echo -e "${GREEN}===========================================${NC}"
+        echo "Model URL: https://huggingface.co/$REPO_ID"
+        echo ""
+        echo "Files uploaded to folder: $(basename "$CHECKPOINT_DIR")/"
+    else
+        echo ""
+        echo "Upload failed. Check errors above."
+        exit 1
+    fi
+    exit 0
+fi
+
 if [ -n "$CHECKPOINT_ARG" ]; then
     CHECKPOINT="$CHECKPOINT_ARG"
     echo "Using specified checkpoint: $CHECKPOINT"

@@ -472,20 +472,22 @@ class DAEFRModel(pl.LightningModule):
                "train/Rec_loss": rec_loss.detach().mean()
             }
 
+        batch_size = x.shape[0]
+        
         bce_loss = log_dict_ae["train/BCE_loss"]
         self.log("BCE_loss", bce_loss, prog_bar=True,
-                 logger=True, on_step=True, on_epoch=True)
+                 logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         l2_loss = log_dict_ae["train/L2_loss"]
         self.log("L2_loss", l2_loss, prog_bar=True,
-                 logger=True, on_step=True, on_epoch=True)
+                 logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         Rec_loss = log_dict_ae["train/Rec_loss"]
         self.log("Rec_loss", Rec_loss, prog_bar=True,
-                 logger=True, on_step=True, on_epoch=True)
+                 logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         self.log_dict(log_dict_ae, prog_bar=False,
-                      logger=True, on_step=True, on_epoch=True)
+                      logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         opt_ae.zero_grad()
         self.manual_backward(aeloss)
@@ -497,9 +499,9 @@ class DAEFRModel(pl.LightningModule):
             discloss, log_dict_disc = self.loss(qloss, x, xrec, components, 1, self.global_step,
                                                 last_layer=None, split="train")
             self.log("train/discloss", discloss, prog_bar=True,
-                     logger=True, on_step=True, on_epoch=True)
+                     logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             opt_disc.zero_grad()
             self.manual_backward(discloss)
             opt_disc.step()
@@ -511,9 +513,9 @@ class DAEFRModel(pl.LightningModule):
             disc_left_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 2, self.global_step,
                                                       last_layer=None, split="train")
             self.log("train/disc_left_loss", disc_left_loss,
-                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             opt_l.zero_grad()
             self.manual_backward(disc_left_loss)
             opt_l.step()
@@ -523,9 +525,9 @@ class DAEFRModel(pl.LightningModule):
             disc_right_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 3, self.global_step,
                                                        last_layer=None, split="train")
             self.log("train/disc_right_loss", disc_right_loss,
-                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             opt_r.zero_grad()
             self.manual_backward(disc_right_loss)
             opt_r.step()
@@ -535,9 +537,9 @@ class DAEFRModel(pl.LightningModule):
             disc_mouth_loss, log_dict_disc = self.loss(qloss, x, xrec, components, 4, self.global_step,
                                                        last_layer=None, split="train")
             self.log("train/disc_mouth_loss", disc_mouth_loss,
-                     prog_bar=True, logger=True, on_step=True, on_epoch=True)
+                     prog_bar=True, logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             self.log_dict(log_dict_disc, prog_bar=False,
-                          logger=True, on_step=True, on_epoch=True)
+                          logger=True, on_step=True, on_epoch=True, batch_size=batch_size, sync_dist=True)
             opt_m.zero_grad()
             self.manual_backward(disc_mouth_loss)
             opt_m.step()
@@ -560,7 +562,8 @@ class DAEFRModel(pl.LightningModule):
                 "val/L2_loss": L2_loss.detach().mean(),
                 "val/Rec_loss": rec_loss.detach().mean()
             }
-        self.log_dict(log_dict_ae)
+        batch_size = x.shape[0]
+        self.log_dict(log_dict_ae, batch_size=batch_size, sync_dist=True)
 
         return self.log_dict
 
