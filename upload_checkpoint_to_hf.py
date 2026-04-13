@@ -51,8 +51,8 @@ import torch
 
 # Download checkpoint
 checkpoint_path = hf_hub_download(
-    repo_id="{repo_id}",
-    filename="{checkpoint_name}"
+    repo_id="{{repo_id}}",
+    filename="{{checkpoint_name}}"
 )
 
 # Load model
