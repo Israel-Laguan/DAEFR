@@ -189,7 +189,7 @@ For any question, feel free to email `louis19950117@gmail.com`.
 
 `cd ~/code/datasets/DAEFR`
 ```
-venv/bin/python -u main_DAEFR.py   --root-path ./experiments/   --base configs/DAEFR.yaml   -t True --gpus 0,1 --num-nodes 1   --resume ./experiments/DAEFR_model.ckpt   --max_epochs 47
+venv/bin/python -u main_DAEFR.py   --root-path ./experiments/   --base configs/DAEFR_predegraded.yaml  -t True --gpus 0,1 --num-nodes 1   --resume ./experiments/DAEFR_model.ckpt   --max_epochs 47
 ```
 watch -n 1 nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu --format=csv
 ```

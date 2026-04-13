@@ -50,7 +50,7 @@ data:
   target: main_DAEFR.DataModuleFromConfig
   params:
     batch_size: 16  # Reduced from 32 - still OOM, ~45GB expected at 16
-    num_workers: 4  # Reduced for cloud VM DDP training - prevents thread exhaustion
+    num_workers: 8  # Tested optimal for 2x B200 DDP (diagnostic: scripts/test_dataloader_workers.py)
     pin_memory: true
     persistent_workers: true
     prefetch_factor: 4  # Increased for better pipeline depth
