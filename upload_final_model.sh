@@ -27,6 +27,7 @@ NC='\033[0m' # No Color
 # Parse arguments
 INIT_MODE=false
 CHECKPOINT_ARG=""
+USE_BEST_EPOCH=true  # Default: find highest epoch checkpoint (e.g., epoch=000048)
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -36,13 +37,23 @@ while [[ $# -gt 0 ]]; do
             ;;
         --checkpoint)
             CHECKPOINT_ARG="$2"
+            USE_BEST_EPOCH=false
             shift 2
+            ;;
+        --use-best-epoch)
+            USE_BEST_EPOCH=true
+            shift
+            ;;
+        --use-latest-time)
+            USE_BEST_EPOCH=false
+            shift
             ;;
         --help|-h)
             echo "Usage:"
             echo "  $0 --init                    # Initialize repo with README before training"
-            echo "  $0                           # Upload final checkpoint (auto-find or use FINAL_CHECKPOINT)"
+            echo "  $0                           # Upload checkpoint with highest epoch number (default)"
             echo "  $0 --checkpoint <path>       # Upload specific checkpoint"
+            echo "  $0 --use-latest-time         # Find by modification time instead of epoch"
             exit 0
             ;;
         *)
@@ -92,17 +103,41 @@ fi
 if [ -n "$CHECKPOINT_ARG" ]; then
     CHECKPOINT="$CHECKPOINT_ARG"
     echo "Using specified checkpoint: $CHECKPOINT"
-elif [ -f "$FINAL_CHECKPOINT" ]; then
-    CHECKPOINT="$FINAL_CHECKPOINT"
-    echo "Using final checkpoint: $CHECKPOINT"
-else
-    # Auto-find latest checkpoint
-    echo "Searching for latest checkpoint in ./experiments/..."
+elif [ "$USE_BEST_EPOCH" = true ]; then
+    # Find highest epoch checkpoint (e.g., epoch=000048)
+    echo "Searching for highest epoch checkpoint in ./experiments/..."
     
-    if [ -f "./experiments/last.ckpt" ]; then
-        CHECKPOINT="./experiments/last.ckpt"
+    # Run Python to find best epoch
+    CHECKPOINT=$(python -c "
+import sys
+sys.path.insert(0, '.')
+from upload_checkpoint_to_hf import find_best_epoch_checkpoint
+ckpt = find_best_epoch_checkpoint('./experiments')
+print(ckpt if ckpt else '')
+" 2>/dev/null)
+    
+    if [ -n "$CHECKPOINT" ]; then
+        echo "Found: $CHECKPOINT"
     else
-        CHECKPOINT=$(find ./experiments -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
+        echo "No epoch checkpoint found, falling back to time-based search..."
+        USE_BEST_EPOCH=false
+    fi
+fi
+
+# If best epoch didn't find anything, fall back to time-based or FINAL_CHECKPOINT
+if [ -z "$CHECKPOINT" ] && [ -z "$CHECKPOINT_ARG" ]; then
+    if [ -f "$FINAL_CHECKPOINT" ]; then
+        CHECKPOINT="$FINAL_CHECKPOINT"
+        echo "Using final checkpoint: $CHECKPOINT"
+    else
+        # Auto-find latest checkpoint by time
+        echo "Searching for latest checkpoint by time in ./experiments/..."
+        
+        if [ -f "./experiments/last.ckpt" ]; then
+            CHECKPOINT="./experiments/last.ckpt"
+        else
+            CHECKPOINT=$(find ./experiments -name "*.ckpt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
+        fi
     fi
 fi
 
@@ -142,10 +177,17 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # Run upload
-python upload_checkpoint_to_hf.py \
-    --checkpoint "$CHECKPOINT" \
-    --repo-id "$REPO_ID" \
-    --private "$PRIVATE"
+if [ "$USE_BEST_EPOCH" = true ] && [ -z "$CHECKPOINT_ARG" ]; then
+    python upload_checkpoint_to_hf.py \
+        --use-best-epoch \
+        --repo-id "$REPO_ID" \
+        --private "$PRIVATE"
+else
+    python upload_checkpoint_to_hf.py \
+        --checkpoint "$CHECKPOINT" \
+        --repo-id "$REPO_ID" \
+        --private "$PRIVATE"
+fi
 
 if [ $? -eq 0 ]; then
     echo ""

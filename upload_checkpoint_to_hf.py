@@ -126,13 +126,12 @@ def init_repo_with_readme(repo_id, token=None, private=False, epochs=100):
 
 
 def find_latest_checkpoint(experiments_dir="./experiments"):
-    """Find the latest checkpoint in the experiments directory."""
+    """Find the latest checkpoint by modification time."""
     
-    # Search for checkpoint files
     patterns = [
-        f"{experiments_dir}/*/checkpoints/*.ckpt",  # Nested structure
-        f"{experiments_dir}/*/*.ckpt",               # Flat structure
-        f"{experiments_dir}/*.ckpt",                 # Direct in experiments
+        f"{experiments_dir}/*/checkpoints/*.ckpt",
+        f"{experiments_dir}/*/*.ckpt",
+        f"{experiments_dir}/*.ckpt",
     ]
     
     all_checkpoints = []
@@ -151,6 +150,42 @@ def find_latest_checkpoint(experiments_dir="./experiments"):
             return ckpt
     
     return all_checkpoints[0]
+
+
+def find_best_epoch_checkpoint(experiments_dir="./experiments"):
+    """Find checkpoint with highest epoch number (e.g., epoch=000048)."""
+    import re
+    
+    patterns = [
+        f"{experiments_dir}/*/checkpoints/*.ckpt",
+        f"{experiments_dir}/*/*.ckpt",
+        f"{experiments_dir}/*.ckpt",
+    ]
+    
+    all_checkpoints = []
+    for pattern in patterns:
+        all_checkpoints.extend(glob.glob(pattern))
+    
+    if not all_checkpoints:
+        return None
+    
+    # Extract epoch numbers and find highest
+    best_checkpoint = None
+    best_epoch = -1
+    
+    for ckpt in all_checkpoints:
+        # Match patterns like epoch=000048 or epoch=000001
+        match = re.search(r'epoch[=\-]?(\d+)', os.path.basename(ckpt))
+        if match:
+            epoch = int(match.group(1))
+            if epoch > best_epoch:
+                best_epoch = epoch
+                best_checkpoint = ckpt
+        elif "last.ckpt" in ckpt and best_epoch == -1:
+            # Fallback to last.ckpt if no epoch found yet
+            best_checkpoint = ckpt
+    
+    return best_checkpoint
 
 
 def upload_to_huggingface(checkpoint_path, repo_id, token=None, private=False):
@@ -215,6 +250,100 @@ def upload_to_huggingface(checkpoint_path, repo_id, token=None, private=False):
         sys.exit(1)
 
 
+def upload_all_checkpoints(experiments_dir, repo_id, token=None, private=False):
+    """Upload all checkpoints from experiment folder to Hugging Face."""
+    
+    try:
+        from huggingface_hub import HfApi, create_repo
+    except ImportError:
+        print("Error: huggingface_hub not installed. Run: pip install huggingface_hub")
+        sys.exit(1)
+    
+    import re
+    
+    # Find all checkpoint files
+    patterns = [
+        f"{experiments_dir}/*/*.ckpt",
+        f"{experiments_dir}/*.ckpt",
+    ]
+    
+    all_checkpoints = []
+    for pattern in patterns:
+        all_checkpoints.extend(glob.glob(pattern))
+    
+    if not all_checkpoints:
+        print(f"No checkpoints found in {experiments_dir}")
+        sys.exit(1)
+    
+    # Filter out last.ckpt if we have epoch checkpoints (to avoid duplicates)
+    epoch_checkpoints = [c for c in all_checkpoints if re.search(r'epoch[=\-]?\d+', os.path.basename(c))]
+    if epoch_checkpoints:
+        checkpoints_to_upload = sorted(epoch_checkpoints, key=lambda x: int(re.search(r'epoch[=\-]?(\d+)', os.path.basename(x)).group(1)))
+    else:
+        checkpoints_to_upload = all_checkpoints
+    
+    print(f"Found {len(checkpoints_to_upload)} checkpoint(s) to upload:")
+    for ckpt in checkpoints_to_upload:
+        print(f"  - {os.path.basename(ckpt)}")
+    
+    api = HfApi(token=token)
+    
+    # Create or get repo
+    try:
+        repo_url = create_repo(
+            repo_id=repo_id,
+            repo_type="model",
+            exist_ok=True,
+            private=private,
+            token=token
+        )
+        print(f"\nRepository ready: {repo_url}")
+    except Exception as e:
+        print(f"\nNote: Using existing repository: {e}")
+    
+    # Upload all checkpoints
+    print(f"\nUploading to https://huggingface.co/{repo_id}...")
+    
+    for checkpoint_path in checkpoints_to_upload:
+        ckpt_name = os.path.basename(checkpoint_path)
+        print(f"\nUploading {ckpt_name}...")
+        
+        try:
+            api.upload_file(
+                path_or_fileobj=checkpoint_path,
+                path_in_repo=ckpt_name,
+                repo_id=repo_id,
+                repo_type="model",
+                token=token
+            )
+            print(f"  ✓ Uploaded {ckpt_name}")
+        except Exception as e:
+            print(f"  ✗ Failed to upload {ckpt_name}: {e}")
+    
+    # Upload config
+    config_path = Path(experiments_dir) / "DAEFR.yaml"
+    if not config_path.exists():
+        config_path = Path("./configs/DAEFR.yaml")
+    
+    if config_path.exists():
+        print(f"\nUploading config: {config_path.name}")
+        try:
+            api.upload_file(
+                path_or_fileobj=str(config_path),
+                path_in_repo="DAEFR.yaml",
+                repo_id=repo_id,
+                repo_type="model",
+                token=token
+            )
+            print(f"  ✓ Uploaded config")
+        except Exception as e:
+            print(f"  ✗ Failed to upload config: {e}")
+    
+    print(f"\n{'='*50}")
+    print(f"All uploads complete: https://huggingface.co/{repo_id}")
+    print(f"{'='*50}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Upload DAEFR checkpoint to Hugging Face")
     parser.add_argument("--init", action="store_true", 
@@ -223,7 +352,10 @@ def main():
     parser.add_argument("--final-checkpoint", "-f", type=str, 
                         default="./experiments/DAEFR_model.ckpt",
                         help="Path to final checkpoint to upload (default: ./experiments/DAEFR_model.ckpt)")
-    parser.add_argument("--auto-find", action="store_true", help="Automatically find latest checkpoint")
+    parser.add_argument("--auto-find", action="store_true", 
+                        help="Automatically find latest checkpoint by modification time")
+    parser.add_argument("--use-best-epoch", action="store_true",
+                        help="Find checkpoint with highest epoch number (e.g., epoch=000048)")
     parser.add_argument("--repo-id", "-r", type=str, required=True, 
                         help="HuggingFace repo ID (e.g., username/model-name)")
     parser.add_argument("--token", "-t", type=str, default=None, 
@@ -233,6 +365,8 @@ def main():
                         help="Directory to search for checkpoints")
     parser.add_argument("--epochs", type=int, default=100,
                         help="Number of training epochs (for README)")
+    parser.add_argument("--upload-all", action="store_true",
+                        help="Upload ALL checkpoints from the experiment folder (not just best)")
     
     args = parser.parse_args()
     
@@ -244,15 +378,37 @@ def main():
         print("Initializing repository with README...")
         init_repo_with_readme(args.repo_id, token, args.private, args.epochs)
         print(f"\nRepo ready! After training completes, run:")
-        print(f"  python upload_checkpoint_to_hf.py --final-checkpoint {args.final_checkpoint} --repo-id {args.repo_id}")
+        print(f"  python upload_checkpoint_to_hf.py --use-best-epoch --repo-id {args.repo_id}")
+        print(f"  # Or upload all: python upload_checkpoint_to_hf.py --upload-all --experiments-dir <folder> --repo-id {args.repo_id}")
         return
     
-    # Determine which checkpoint to use
+    # Handle --upload-all flag (upload all checkpoints from folder)
+    if args.upload_all:
+        print(f"Uploading ALL checkpoints from {args.experiments_dir}...")
+        upload_all_checkpoints(args.experiments_dir, args.repo_id, token, args.private)
+        return
+    
+    # Determine which checkpoint to use (single upload)
     checkpoint = None
     if args.checkpoint:
         checkpoint = args.checkpoint
+        print(f"Using specified checkpoint: {checkpoint}")
+    elif args.use_best_epoch:
+        print(f"Searching for highest epoch checkpoint in {args.experiments_dir}...")
+        checkpoint = find_best_epoch_checkpoint(args.experiments_dir)
+        if checkpoint:
+            # Extract epoch number for display
+            import re
+            match = re.search(r'epoch[=\-]?(\d+)', os.path.basename(checkpoint))
+            if match:
+                print(f"Found epoch {int(match.group(1))}: {checkpoint}")
+            else:
+                print(f"Found: {checkpoint}")
+        else:
+            print("No checkpoint found!")
+            sys.exit(1)
     elif args.auto_find:
-        print(f"Searching for latest checkpoint in {args.experiments_dir}...")
+        print(f"Searching for latest checkpoint by time in {args.experiments_dir}...")
         checkpoint = find_latest_checkpoint(args.experiments_dir)
         if checkpoint:
             print(f"Found: {checkpoint}")
@@ -263,10 +419,11 @@ def main():
         checkpoint = args.final_checkpoint
         if not os.path.exists(checkpoint):
             print(f"Error: Final checkpoint not found at {checkpoint}")
-            print("Training may not be complete yet.")
+            print("Training may not be complete yet. Use --use-best-epoch to find latest.")
             sys.exit(1)
+        print(f"Using final checkpoint: {checkpoint}")
     else:
-        print("Error: Must specify one of --checkpoint, --final-checkpoint, --auto-find, or --init")
+        print("Error: Must specify one of --checkpoint, --final-checkpoint, --auto-find, --use-best-epoch, --upload-all, or --init")
         parser.print_help()
         sys.exit(1)
     
