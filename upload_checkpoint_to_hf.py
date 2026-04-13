@@ -68,12 +68,12 @@ model = torch.load(checkpoint_path, map_location='cpu')
 ## Citation
 
 ```bibtex
-@article{DAEFR,
-  title={Degradation-Aware Face Restoration},
-  author={},
-  journal={},
-  year={2024}
-}
+@article{{DAEFR,
+  title={{Degradation-Aware Face Restoration}},
+  author={{}},
+  journal={{}},
+  year={{2024}}
+}}
 ```
 """
 
