@@ -18,6 +18,7 @@
 REPO_ID="israellaguan/DAEFR-final"  # Change to your HF username and desired model name
 PRIVATE=false                         # Set to true for private repo
 FINAL_CHECKPOINT="./experiments/DAEFR_model.ckpt"  # Expected final checkpoint path
+CHECKPOINT_DIR="./experiments"        # Default directory for --upload-all
 EPOCHS=100                            # Training epochs (for README)
 # Get token from environment or paste here (not recommended for security)
 HF_TOKEN="${HF_TOKEN:-}"
@@ -62,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             PRESERVE_STRUCTURE=""
             shift
             ;;
+        --checkpoint-dir)
+            CHECKPOINT_DIR="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage:"
             echo "  $0 --init                    # Initialize repo with README before training"
@@ -69,6 +74,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --checkpoint <path>       # Upload specific checkpoint"
             echo "  $0 --use-latest-time         # Find by modification time instead of epoch"
             echo "  $0 --upload-all              # Upload ALL checkpoints from folder (preserves structure)"
+            echo "  $0 --checkpoint-dir <path>   # Directory for --upload-all (default: ./experiments)"
             echo "  $0 --flat                    # Upload flat (no subfolders, overrides --upload-all structure)"
             exit 0
             ;;
