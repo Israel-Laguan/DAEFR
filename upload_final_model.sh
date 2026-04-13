@@ -15,7 +15,7 @@
 #   ./upload_final_model.sh --checkpoint ./experiments/DAEFR_model.ckpt
 
 # Configuration - EDIT THESE
-REPO_ID="your-username/DAEFR-final"  # Change to your HF username and desired model name
+REPO_ID="israellaguan/DAEFR-final"  # Change to your HF username and desired model name
 PRIVATE=false                         # Set to true for private repo
 FINAL_CHECKPOINT="./experiments/DAEFR_model.ckpt"  # Expected final checkpoint path
 EPOCHS=100                            # Training epochs (for README)
